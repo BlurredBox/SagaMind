@@ -68,7 +68,7 @@ Python 3.10+ and, optionally, the Z3 solver binary.
 
 ```bash
 # Clone the repository
-git clone https://github.com/Harut200/SagaMind.git
+git clone https://github.com/BlurredBox/SagaMind.git
 cd SagaMind
 
 # Install the core runtime
@@ -102,10 +102,10 @@ docker compose up --build     # API + TimescaleDB + Neo4j + Redis
 
 For exhaustive theoretical and technical specifications:
 
-- [research_paper.md](https://github.com/Harut200/SagaMind/blob/main/research_paper.md) — theoretical foundations, CLS memory model, and SMT solving invariants.
-- [system_architecture.md](https://github.com/Harut200/SagaMind/blob/main/system_architecture.md) — subsystem interactions, WebAssembly COW sandbox configs, and sequence flows.
-- [specifications.md](https://github.com/Harut200/SagaMind/blob/main/specifications.md) — SQL schemas, Neo4j graphs, gRPC proto, and core algorithms.
-- [architecture_exp.md](https://github.com/Harut200/SagaMind/blob/main/architecture_exp.md) — complete system specification with a full runnable code engine.
+- [research_paper.md](https://github.com/BlurredBox/SagaMind/blob/main/research_paper.md) — theoretical foundations, CLS memory model, and SMT solving invariants.
+- [system_architecture.md](https://github.com/BlurredBox/SagaMind/blob/main/system_architecture.md) — subsystem interactions, WebAssembly COW sandbox configs, and sequence flows.
+- [specifications.md](https://github.com/BlurredBox/SagaMind/blob/main/specifications.md) — SQL schemas, Neo4j graphs, gRPC proto, and core algorithms.
+- [architecture_exp.md](https://github.com/BlurredBox/SagaMind/blob/main/architecture_exp.md) — complete system specification with a full runnable code engine.
 
 ---
 
@@ -117,11 +117,11 @@ For exhaustive theoretical and technical specifications:
 
 ## Contributing
 
-Contributions are welcome — see [CONTRIBUTING.md](https://github.com/Harut200/SagaMind/blob/main/CONTRIBUTING.md). If the premise resonates — that an agent's intelligence should be bounded by what it can prove, not what it can generate — issues and PRs are open.
+Contributions are welcome — see [CONTRIBUTING.md](https://github.com/BlurredBox/SagaMind/blob/main/CONTRIBUTING.md). If the premise resonates — that an agent's intelligence should be bounded by what it can prove, not what it can generate — issues and PRs are open.
 
 ## License
 
-MIT — see the [LICENSE](https://github.com/Harut200/SagaMind/blob/main/LICENSE) file.
+MIT — see the [LICENSE](https://github.com/BlurredBox/SagaMind/blob/main/LICENSE) file.
 
 ## Author
 
