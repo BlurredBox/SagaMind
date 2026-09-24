@@ -42,24 +42,21 @@ class TestSpeculativeValidation:
         assert not target.exists()
 
 
-class TestSelectAndCommit:
-    async def test_commit_first_valid_draft_materialises_side_effect(self, jailed):
+class TestWinnerSelection:
+    async def test_select_first_valid_draft_has_no_side_effect(self, jailed):
         orch, root = jailed
         target = root / "committed.txt"
         results = await orch.run_speculative_drafts(
             [{"command": "WRITE_FILE", "arguments": {"path": str(target), "content": "done"}}]
         )
-        committed = orch.select_and_commit(results)
-        assert committed is not None
-        assert target.read_text() == "done"
+        selected = orch.select_winner(results)
+        assert selected is not None
+        assert selected[1].tool_name == "WRITE_FILE"
+        assert not target.exists()
 
     async def test_no_valid_draft_commits_nothing(self, jailed):
         orch, _ = jailed
         results = await orch.run_speculative_drafts(
             [{"command": "WRITE_FILE", "arguments": {"path": "/root/x", "content": "x"}}]
         )
-        assert orch.select_and_commit(results) is None
-
-    def test_commit_unknown_sandbox_is_false(self, jailed):
-        orch, _ = jailed
-        assert orch.commit_sandbox_state("sb-missing") is False
+        assert orch.select_winner(results) is None

@@ -1,11 +1,13 @@
 # SagaMind: A Transaction-Safe Multi-Agent Runtime & Cognitive Memory Co-Processor
 ## Academic System Specification and Architectural Blueprint
 
+> **Historical design document:** Several sections describe target behavior rather than shipped behavior. Use root `ARCHITECTURE.md` as the source of truth and `research_paper.md` plus tests for evidence. Built-ins now use isolated workers with typed mutation policies; speculative validation still has no COW overlay; formal claims remain bounded to declared models.
+
 ---
 
 ### Abstract
 
-This document presents the comprehensive architectural blueprint, mathematical foundations, and system specifications for **SagaMind**, an enterprise-grade, transaction-safe multi-agent runtime and cognitive memory co-processor. Designed to bridge the gap between stochastic neural model execution (System 1) and deterministic formal safety gates (System 2), SagaMind introduces a novel neuro-symbolic execution model. It leverages Satisfiability Modulo Theories (SMT) via the Z3 theorem prover to guarantee execution safety, utilizes a transaction coordinator implementing the Saga pattern with LIFO compensation logic to preserve system consistency, and integrates a multi-layered cognitive co-processor based on Ebbinghaus memory decay and density-based experience consolidation. We provide detailed specifications of the runtime engine, mathematical derivations of the decay curves, formal invariants of the verification solver, and implementation outlines for deployment at scale.
+This document presents SagaMind's architectural blueprint and historical design rationale. The prototype combines typed/SMT policy checks, journaled Saga compensations, parameterized memory decay, and density-based consolidation. None of these mechanisms alone guarantees overall execution safety or consistency: policies can be incomplete, compensations can fail, and isolated workers are not hostile-code microVMs.
 
 ---
 
@@ -41,8 +43,8 @@ SagaMind resolves this tension by implementing a **Neuro-Symbolic Dual-Process C
                   └──────────────────┘   └──────────────────┘
 ```
 
-*   **System 1 (Stochastic Reasoning)**: The LLM agent acts as the generative interface. It proposes steps, tools, and actions based on context and goals. However, the system never executes System 1 proposals directly on the production host.
-*   **System 2 (Deterministic Guard rails)**: The formal validation gate. Every action proposal is converted into symbolic logical statements and checked against invariants using the Z3 theorem prover. If the solver proves that the execution invariants are satisfied (i.e., no safety violation is possible), the action is compiled and executed in a sandboxed WebAssembly (WASM) environment. If a safety boundary is violated, the step is rejected, and a compensation workflow is triggered to restore state consistency.
+*   **System 1 (Stochastic Reasoning)**: An LLM may propose steps, tools, and actions. Production safety still depends on caller-supplied policies and execution controls.
+*   **System 2 (Deterministic Guard rails)**: Supported scalar arguments can be checked against supplied SMT invariants. Built-in tools then run on host under an allow-list and path jail; only separately compiled tools can use the WASI primitive.
 
 ---
 
@@ -75,13 +77,13 @@ SagaMind is structured as a decoupled, modular co-processor. The system is split
 1.  **`src/models.py`**: The canonical data schema definition layer. Defines state-machine models (`SagaStep`, `SagaTransaction`), action payloads (`ActionPayload`), and memory units (`MemoryNode`) to eliminate schema drift across modular boundaries.
 2.  **`src/config.py`**: Centralized configuration and validation management. Sanitizes host credentials and paths.
 3.  **`src/orchestrator/coordinator.py`**: The Saga Transaction Coordinator. Manages transaction logging, execution progress, callbacks, and compensation LIFO queues.
-4.  **`src/orchestrator/sandbox.py`**: The WebAssembly isolated execution sandbox. Interprets tool calls, prevents directory traversals, and mocks physical interfaces.
+4.  **`src/orchestrator/sandbox.py`**: The capability-scoped execution boundary. It runs trusted built-ins in short-lived workers, supports optional WASI modules, enforces typed policies and path containment, and provides real reference filesystem effects.
 5.  **`src/verifier/z3_prover.py`**: SMT logic prover. Translates string invariants into SMT-LIB2 queries and solves for safety proofs.
 6.  **`src/memory/decay.py`**: Calculates temporal cognitive decay using Ebbinghaus equations. Handles active-memory retention filtering.
 7.  **`src/memory/consolidation.py`**: Periodically runs unsupervised clustering over episodic memory records to distill abstract concepts.
 8.  **`src/memory/timescale_store.py`**: Persists chronological memory logs and executes vector similarity queries via PostgreSQL pgvector.
 9.  **`src/memory/neo4j_store.py`**: Manages semantic memory graphs, connecting agent roles and concepts with weighted edges.
-10. **`src/speculative/orchestrator.py`**: Handles Copy-On-Write (COW) sandbox environments to execute and verify draft state paths in parallel.
+10. **`src/speculative/orchestrator.py`**: Validates draft actions concurrently without side effects, then executes one winner. It does not implement COW filesystem overlays.
 
 ---
 
@@ -155,7 +157,7 @@ A Saga is represented as a sequence of steps $S_1, S_2, \dots, S_m$, where each 
 1.  An execution action, $A_i$.
 2.  A compensating action, $C_i$, which undoes the effects of $A_i$ in case of failure.
 
-The Saga guarantees **backward recovery**: if step $S_k$ fails (where $1 \le k \le m$), the engine halts execution and executes the compensating actions in **Last-In, First-Out (LIFO)** order:
+The Saga attempts **backward recovery**: if step $S_k$ fails (where $1 \le k \le m$), the engine halts execution and executes registered compensating actions in **Last-In, First-Out (LIFO)** order. Recovery is complete only if every compensation succeeds and accurately reverses its effect:
 $$C_k, C_{k-1}, \dots, C_1$$
 
 ### 4.2 Step State Transitions
@@ -289,10 +291,10 @@ Speculative Orches. ── Drafts ─┼──► COW Sandbox B ──► Access
 ```
 
 1.  The agent submits multiple draft command sets (e.g. alternative compilation steps or query paths).
-2.  The speculative orchestrator spins up isolated Copy-on-Write (COW) overlay folders matching the host environment.
+2.  Current speculative orchestrator validates drafts without applying side effects; isolated COW overlay folders are a future design target.
 3.  Drafts are executed asynchronously in parallel.
 4.  Each path returns a state diff hash and success code.
-5.  If a path succeeds and is selected by the coordinator, its COW state overlay is merged/committed to the primary workspace environment. Rejected paths are deleted instantly.
+5.  If a draft succeeds and is selected, its action is executed once through the real sandbox. No overlay is created or merged in the current implementation.
 
 ---
 
@@ -347,10 +349,10 @@ ON MATCH SET r.weight = r.weight + (1.0 - r.weight) * 0.1;
 
 ---
 
-## 8. Mathematical Proofs and Formal Specifications
+## 8. Design Arguments and Formal Specifications
 
-### 8.1 Theorem 1: Path Traversal Prevention Invariant
-**Goal**: Prove that no file write path $P$ can access a folder outside the authorized root directory $W_{root}$.
+### 8.1 Path Traversal Prevention Argument
+**Goal**: State the intended property that no file write path $P$ accesses a folder outside authorized root $W_{root}$.
 
 **Definitions**:
 *   Let $\Sigma^*$ be the set of all string sequences.
@@ -361,14 +363,7 @@ ON MATCH SET r.weight = r.weight + (1.0 - r.weight) * 0.1;
 **Invariant**:
 $$\forall P \in \Sigma^*, \quad \text{write\_file}(P) \implies P_{ref}(W_{root}, C(P))$$
 
-**Proof by SMT Assertion**:
-In the Z3 verifier, we assert the negation of the invariant:
-$$\Phi = \text{Not}(P_{ref}(W_{root}, C(P)))$$
-
-The solver is initialized with the constraint:
-$$C(P) == v_{path}$$
-
-If there exists any input $P$ that resolves such that $C(P)$ does not begin with $W_{root}$, the solver returns `SAT` with the violating path string as the model counter-example (e.g. $P = "/app/workspace/../../etc/passwd" \implies C(P) = "/etc/passwd"$). The verifier catches this model, returns `False`, and blocks execution before the file system API is called. Since the solver is sound and complete for string logic, traversal attacks are guaranteed to be blocked. $\blacksquare$
+**Implemented enforcement:** Python canonicalizes the configured root and candidate with `realpath`, then checks containment with `commonpath`. The Z3 layer can additionally check string policies but does not model filesystem canonicalization. This reduces common traversal and symlink attacks; it is not a proof against every filesystem race or platform-specific behavior.
 
 ### 8.2 Theorem 2: Spaced Recall Memory Decay Limit
 **Goal**: Prove that the memory retention probability $R(t)$ is non-increasing with respect to time $t$, and strictly increasing with respect to retrieval access count $n_{access}$.
@@ -484,13 +479,13 @@ spec:
 | **Sandbox Environment** | Wasmtime WASM Sandbox | Local execution | Docker container | Local bash shell |
 | **Cognitive Memory Decay** | Ebbinghaus Curve Eviction | None (FIFO context limits) | None | None |
 | **Experience Consolidation** | Unsupervised DBSCAN to Graph | None | None | None |
-| **Speculative Execution** | COW parallel overlay states | None | None | None |
+| **Speculative Validation** | Parallel side-effect-free checks; execute one winner | None | None | None |
 | **Production Target** | $200M+ Enterprise Systems | Developers prototyping | Academic exploration | CLI operations |
 
 ---
 
 ## 11. Conclusion & Future Outlook
 
-SagaMind establishes a new paradigm for autonomous agent architecture, proving that cognitive reasoning can be bound by formal safety contracts and transactional guarantees. By separating generation (System 1) from verification (System 2) and execution, the system achieves unprecedented stability, eliminating security risks like directory traversals and untracked file system corruptions.
+SagaMind explores one composition of policy checking, compensation, and tiered memory. Controlled tests support narrow implementation properties; they do not prove unprecedented stability, eliminate all security risk, or establish a new scientific paradigm.
 
 Future iterations of SagaMind will expand the SMT verification layer to support more complex invariant structures, and integrate active learning loops to optimize the parameters of the Ebbinghaus memory decay system dynamically based on task completion rates.

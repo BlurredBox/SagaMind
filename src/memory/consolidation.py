@@ -3,13 +3,9 @@ SagaMind Memory Consolidation ("Sleep Cycle")
 =============================================
 
 Groups semantically similar episodic memories and distils each group into concept
-relationships written to the semantic graph — a computational analogue of hippocampal
-replay during sleep.
-
-Clustering is single-linkage connected-components over cosine distance. The pairwise
-distances are computed with a single vectorised NumPy matrix product (O(n^2) memory but
-BLAS-fast and far cheaper than the previous pure-Python double loop); the grouping
-semantics are unchanged so behaviour is deterministic and reproducible.
+relationships written to the semantic graph. Clustering uses deterministic DBSCAN over
+cosine distance. One implementation is used in every environment, avoiding result drift
+based on whether scikit-learn happens to be installed.
 
 If an LLM client is supplied, each cluster is labelled with a distilled concept summary;
 otherwise a deterministic ``Cluster {n} Concept`` label is used so the pipeline is fully
@@ -165,51 +161,51 @@ class MemoryConsolidator:
         return []
 
     def _cluster(self, episodes: list[Any], eps: float, min_samples: int = 2) -> dict[int, list[Any]]:
-        """Cluster episodes via DBSCAN (cosine metric) when sklearn is available.
+        """Cluster episodes with deterministic DBSCAN over cosine distance.
 
-        Falls back to connected-components when sklearn is absent so that the test
-        suite and offline demo continue to work without the dashboard extras.
+        ``min_samples`` includes the point itself, matching the standard DBSCAN
+        definition. Noise points are omitted from the returned mapping.
         """
         embeddings = [_embedding(ep) for ep in episodes]
-        try:
-            import numpy as np
-            from sklearn.cluster import DBSCAN
-
-            widths = {len(e) for e in embeddings}
-            if len(widths) != 1:
-                raise ValueError("ragged embeddings")
-            m = np.asarray(embeddings, dtype=float)
-            norms = np.linalg.norm(m, axis=1, keepdims=True)
-            norms[norms == 0] = 1.0
-            unit = m / norms
-            labels = DBSCAN(eps=eps, min_samples=min_samples, metric="cosine").fit_predict(unit)
-            clusters: dict[int, list[Any]] = {}
-            for idx, label in enumerate(labels):
-                if label == -1:
-                    continue  # noise — isolated occurrence, not a concept
-                clusters.setdefault(int(label), []).append(episodes[idx])
-            return clusters
-        except Exception:  # noqa: BLE001 - sklearn absent or ragged input → fallback
-            return self._cluster_connected_components(episodes, embeddings, eps)
-
-    def _cluster_connected_components(
-        self, episodes: list[Any], embeddings: list[Any], eps: float
-    ) -> dict[int, list[Any]]:
-        """Deterministic single-linkage fallback used when sklearn is unavailable."""
         dist = self._distance_matrix(embeddings)
         n = len(episodes)
-        clusters: dict[int, list[Any]] = {}
-        assigned: set[int] = set()
+        unvisited = -2
+        noise = -1
+        labels = [unvisited] * n
+        cluster_id = 0
+
+        def neighbours(index: int) -> list[int]:
+            return [j for j in range(n) if float(dist[index][j]) <= eps]
+
         for i in range(n):
-            if i in assigned:
+            if labels[i] != unvisited:
                 continue
-            members = [episodes[i]]
-            assigned.add(i)
-            for j in range(n):
-                if j in assigned:
+            near = neighbours(i)
+            if len(near) < min_samples:
+                labels[i] = noise
+                continue
+            labels[i] = cluster_id
+            seeds = [j for j in near if j != i]
+            queued = set(seeds)
+            cursor = 0
+            while cursor < len(seeds):
+                point = seeds[cursor]
+                cursor += 1
+                if labels[point] == noise:
+                    labels[point] = cluster_id
+                if labels[point] != unvisited:
                     continue
-                if dist[i][j] <= eps:
-                    members.append(episodes[j])
-                    assigned.add(j)
-            clusters[len(clusters)] = members
+                labels[point] = cluster_id
+                point_near = neighbours(point)
+                if len(point_near) >= min_samples:
+                    for candidate in point_near:
+                        if candidate not in queued and labels[candidate] in {unvisited, noise}:
+                            seeds.append(candidate)
+                            queued.add(candidate)
+            cluster_id += 1
+
+        clusters: dict[int, list[Any]] = {}
+        for idx, label in enumerate(labels):
+            if label >= 0:
+                clusters.setdefault(label, []).append(episodes[idx])
         return clusters

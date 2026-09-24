@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "independent_replication": false,
+  "executor_name": "",
+  "executor_affiliation": "",
+  "executor_contact": "",
+  "relationship_to_sagamind": "",
+  "repository_revision": "",
+  "protocol_sha256": "",
+  "corpus_sha256": "",
+  "result_artifact_sha256": "",
+  "execution_started_at_utc": "",
+  "execution_finished_at_utc": "",
+  "deviations": [],
+  "notes": "Set independent_replication to true only if the executor is unaffiliated and completed the frozen protocol without undisclosed changes.",
+  "signature": ""
+}
+

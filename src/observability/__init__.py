@@ -7,6 +7,6 @@ libraries are not installed, so importing this package never fails and adds no h
 dependency.
 """
 
-from src.observability.metrics import metrics
+from src.observability.metrics import metrics, span
 
-__all__ = ["metrics"]
+__all__ = ["metrics", "span"]

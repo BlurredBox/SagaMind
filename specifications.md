@@ -1,5 +1,7 @@
 # SagaMind: Technical Specifications & Core Algorithms
 
+> **Reference status:** This document includes protocol and schema material that may describe target behavior. `ARCHITECTURE.md` is authoritative for shipped behavior; executable migrations, source, and tests override pseudocode here.
+
 This document contains gRPC definitions, database schemas, and algorithm pseudocode for the **SagaMind** transaction-safe runtime and memory co-processor.
 
 ---

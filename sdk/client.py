@@ -31,11 +31,18 @@ class SagaMindClient:
     def __exit__(self, *exc: Any) -> None:
         self.close()
 
+    @staticmethod
+    def _json_dict(response: httpx.Response) -> dict[str, Any]:
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise TypeError(f"Expected a JSON object, got {type(payload).__name__}.")
+        return payload
+
     # ── Sagas ────────────────────────────────────────────────────────────
     def start_saga(self, tenant_id: str, goal: str) -> dict[str, Any]:
         r = self._client.post("/saga/start", json={"tenant_id": tenant_id, "goal": goal})
         r.raise_for_status()
-        return r.json()
+        return self._json_dict(r)
 
     def submit_step(
         self,
@@ -64,27 +71,27 @@ class SagaMindClient:
             },
         )
         r.raise_for_status()
-        return r.json()
+        return self._json_dict(r)
 
     def get_status(self, saga_id: str) -> dict[str, Any]:
         r = self._client.get(f"/saga/{saga_id}/status")
         r.raise_for_status()
-        return r.json()
+        return self._json_dict(r)
 
     def approve(self, saga_id: str) -> dict[str, Any]:
         r = self._client.post(f"/saga/{saga_id}/approve")
         r.raise_for_status()
-        return r.json()
+        return self._json_dict(r)
 
     def reject(self, saga_id: str) -> dict[str, Any]:
         r = self._client.post(f"/saga/{saga_id}/reject")
         r.raise_for_status()
-        return r.json()
+        return self._json_dict(r)
 
     def history(self, saga_id: str) -> dict[str, Any]:
         r = self._client.get(f"/saga/{saga_id}/history")
         r.raise_for_status()
-        return r.json()
+        return self._json_dict(r)
 
     def stream(self, saga_id: str) -> Iterator[str]:
         """Yield raw SSE ``data: ...`` lines until the saga reaches a terminal state."""
@@ -97,7 +104,7 @@ class SagaMindClient:
     def dead_letters(self) -> dict[str, Any]:
         r = self._client.get("/saga/dead-letters")
         r.raise_for_status()
-        return r.json()
+        return self._json_dict(r)
 
     # ── Memory ───────────────────────────────────────────────────────────
     def active_memories(
@@ -108,21 +115,55 @@ class SagaMindClient:
             params["query"] = query
         r = self._client.get("/memory/active", params=params)
         r.raise_for_status()
-        return r.json()
+        return self._json_dict(r)
+
+    def ingest_memory(
+        self,
+        tenant_id: str,
+        agent_role: str,
+        summary: str,
+        importance: float,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        r = self._client.post(
+            "/memory",
+            json={
+                "tenant_id": tenant_id,
+                "agent_role": agent_role,
+                "summary": summary,
+                "importance": importance,
+                "context": context or {},
+            },
+        )
+        r.raise_for_status()
+        return self._json_dict(r)
 
     def consolidate(self, tenant_id: str) -> dict[str, Any]:
         r = self._client.post("/memory/consolidate", params={"tenant_id": tenant_id})
         r.raise_for_status()
-        return r.json()
+        return self._json_dict(r)
 
     # ── Speculative execution ───────────────────────────────────────────
-    def run_speculative(self, drafts: list[dict[str, Any]]) -> dict[str, Any]:
-        r = self._client.post("/speculative/run", json={"drafts": drafts})
+    def run_speculative(
+        self,
+        tenant_id: str,
+        drafts: list[dict[str, Any]],
+        goal: str = "speculative action",
+    ) -> dict[str, Any]:
+        r = self._client.post(
+            "/speculative/run",
+            json={"tenant_id": tenant_id, "goal": goal, "drafts": drafts},
+        )
         r.raise_for_status()
-        return r.json()
+        return self._json_dict(r)
 
     # ── Health ───────────────────────────────────────────────────────────
     def health(self) -> dict[str, Any]:
         r = self._client.get("/health")
         r.raise_for_status()
-        return r.json()
+        return self._json_dict(r)
+
+    def readiness(self) -> dict[str, Any]:
+        r = self._client.get("/ready")
+        r.raise_for_status()
+        return self._json_dict(r)

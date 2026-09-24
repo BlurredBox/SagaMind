@@ -45,3 +45,30 @@ CREATE TABLE IF NOT EXISTS saga_transactions (
 
 CREATE INDEX IF NOT EXISTS idx_saga_tenant
     ON saga_transactions (tenant_id);
+
+-- Write-ahead effect journal.  The coordinator inserts PREPARED before invoking an
+-- external tool, then advances the row with compare-and-set transitions.  EXECUTING
+-- and COMPENSATING rows are intentionally recoverable ambiguity markers: a process
+-- may have died after the external call but before the next durable write.
+CREATE TABLE IF NOT EXISTS saga_effect_journal (
+    id                     BIGSERIAL PRIMARY KEY,
+    saga_id                UUID NOT NULL REFERENCES saga_transactions(saga_id),
+    seq                    INT NOT NULL,
+    step_id                TEXT NOT NULL,
+    step_name              TEXT NOT NULL,
+    action_tool_name       TEXT NOT NULL,
+    action_arguments       JSONB NOT NULL,
+    compensation_tool_name TEXT NOT NULL,
+    compensation_arguments JSONB NOT NULL,
+    idempotency_key        VARCHAR(128),
+    state                  VARCHAR(32) NOT NULL,
+    result                 JSONB,
+    error                  TEXT,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (saga_id, step_id),
+    UNIQUE (saga_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_saga_effect_recovery
+    ON saga_effect_journal (saga_id, state, seq);

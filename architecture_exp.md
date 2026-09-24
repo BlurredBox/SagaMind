@@ -1,6 +1,8 @@
 # SagaMind: An Enterprise-Grade, Transaction-Safe Multi-Agent Runtime and Cognitive Memory Co-Processor
 ## Comprehensive Architectural & System Design Specification
 
+> **Design-proposal status:** This document contains aspirational architecture and historical implementation sketches. Current behavior is defined only by `ARCHITECTURE.md`; evaluated claims are in `research_paper.md` and tests. COW speculative filesystems remain unimplemented; built-ins use isolated Python workers and optional untrusted compiled tools use WASI.
+
 **Document Version:** 1.0.0  
 **Classification:** Research and Production Architecture Specification  
 **Author:** Senior AI/ML Architect & Lead Systems Researcher  
@@ -9,7 +11,7 @@
 ---
 
 ## Abstract
-This document defines the complete architectural design and technical specifications for **SagaMind**, a novel compound AI agent runtime designed to bridge the gap between probabilistic neural-network planning and deterministic software reliability requirements. 
+This document defines a proposed compound AI-agent runtime intended to connect probabilistic planning with explicit software reliability controls.
 
 SagaMind addresses two primary bottlenecks in production-grade multi-agent deployments:
 1. **Execution Instability:** Resolving the sequential cascading failure problem through an **Agentic Saga Transaction Coordinator** that implements stateful, LIFO-ordered compensating transactions to ensure eventual consistency in external systems.
@@ -54,7 +56,7 @@ This specification details the mathematical formulations, database schemas, gRPC
 ---
 
 ## 1. Introduction and Domain Context
-Multi-agent systems represent the vanguard of automated problem-solving, moving beyond basic prompt engineering into autonomous loops that edit codebases, execute database migrations, interact with third-party payment gates, and manage systems infrastructure. However, the commercial adoption of these systems is bottlenecked by their inability to guarantee reliability. 
+Multi-agent systems can edit codebases, execute database migrations, interact with third-party payment gates, and manage infrastructure. These stateful actions create reliability risks because model-generated plans are probabilistic and external effects are not automatically atomic.
 
 Traditional software engineering relies on deterministic transactions (ACID properties) to ensure that systems remain in a consistent state. If a billing service fails mid-checkout, the database transaction is rolled back. In agentic workflows, however, LLM planners interact with external environments in a stateful, non-atomic manner. A failure at step 8 of a migration pipeline leaves steps 1–7 committed and unresolved, resulting in corrupted files, orphaned cloud resources, and inconsistent databases.
 
@@ -140,7 +142,7 @@ Where $t_{last}$ is the timestamp of the last retrieval event, and $S_m$ is the 
 $$S_m = S_0 \cdot \big( 1 + \alpha \ln(N_{\text{access}} + 1) \big) \cdot I_m$$
 
 Here:
-- $S_0$ is the base decay half-life (configured to 12.0 hours by default).
+- $S_0$ is the base exponential time constant (12.0 hours by default), not a half-life. Corresponding half-life is $S_m\ln 2$.
 - $\alpha$ is a reinforcement coefficient (configured to 0.45).
 - $N_{\text{access}}$ is the cumulative retrieval count of the memory node.
 - $I_m \in [0, 1]$ is the semantic importance weight computed by an evaluator model at the time of creation (e.g., failed transactions receive $I_m = 1.0$, trivial outputs receive $I_m = 0.05$).
@@ -194,8 +196,8 @@ $$\text{Latency}_{\text{SagaMind}} = L_{\text{LLM\_Inference}} + \sum_{i=1}^N \B
 
 When drafting model accuracy is high ($P_{\text{accuracy}} > 0.8$), total execution latency approaches the time required for LLM inference alone.
 
-### 5.2 Copy-On-Write (COW) Wasm Sandboxing
-To ensure parallel speculative tasks do not corrupt files, they run in independent **Wasmtime** runtimes with Copy-on-Write memory page allocations. Speculative changes are saved in temporary memory overlays. Only when a branch is confirmed is the overlay committed to the main environment.
+### 5.2 Copy-On-Write (COW) Wasm Sandboxing — target design
+Current speculative tasks perform side-effect-free validation and execute only the selected winner. Independent filesystem overlays and overlay commit are not implemented. Runtime exposes a separate fuel-metered WASI primitive for compiled tools.
 
 ---
 

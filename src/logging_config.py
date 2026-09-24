@@ -19,6 +19,15 @@ import sys
 from datetime import datetime, timezone
 
 from src.config import settings
+from src.request_context import request_id
+
+
+class RequestContextFilter(logging.Filter):
+    """Attach the current request correlation ID to every log record."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.request_id = request_id.get() or "-"
+        return True
 
 
 class JSONFormatter(logging.Formatter):
@@ -36,6 +45,7 @@ class JSONFormatter(logging.Formatter):
             "module": record.module,
             "function": record.funcName,
             "line": record.lineno,
+            "request_id": getattr(record, "request_id", "-"),
         }
         if record.exc_info and record.exc_info[0] is not None:
             log_entry["exception"] = self.formatException(record.exc_info)
@@ -81,12 +91,13 @@ def configure_logging(env: str | None = None) -> None:
         handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(
             ColorizedFormatter(
-                fmt="%(asctime)s │ %(levelname)s │ %(name)-32s │ %(message)s",
+                fmt="%(asctime)s │ %(levelname)s │ %(name)-32s │ rid=%(request_id)s │ %(message)s",
                 datefmt="%H:%M:%S",
             )
         )
         level = logging.DEBUG
 
+    handler.addFilter(RequestContextFilter())
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)

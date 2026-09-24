@@ -47,9 +47,10 @@ Upon receiving a report, the project maintainers will follow this protocol:
 
 SagaMind enforces a multi-layered security boundary to prevent malicious or stochastic agent actions from compromising host environments:
 
-*   **Z3 Logical Safety Gate (System 2)**: Before executing commands, the Z3 prover evaluates input parameters against SMT-LIB2 path invariants to formally guarantee that directory traversal attacks or unauthorized modifications outside the designated workspace are blocked.
-*   **Wasmtime Isolation Layer**: User-defined and agent-proposed scripts are compiled and executed within a WebAssembly sandbox, preventing raw access to the host's operating system, network interfaces, and unmapped storage blocks.
-*   **Copy-On-Write Speculative Drafts**: Speculative transactions run inside temporary memory-mapped filesystem overlays. Unapproved or failing drafts are completely purged, leaving the main workspace untouched.
+*   **Typed Policy Gate**: Built-in mutating tools cannot register without a typed argument policy. Unsupported, nested, extra, or path-escaping arguments fail closed. Optional SMT-LIB2 adds bounded checks for supported concrete parameters.
+*   **Built-in Worker Boundary**: Trusted reference handlers run in short-lived processes with explicit filesystem, network, environment, time/CPU, memory, and output capabilities. Production forbids host fallback. This worker is not a container or hostile-code microVM.
+*   **Wasmtime Isolation Layer**: Untrusted compiled tools can use a fuel-metered WASI boundary with explicit preopens and environment exposure. Network access is denied by the supported WASI path.
+*   **Side-effect-free Speculative Validation**: Drafts are checked concurrently without executing their tool effects. Only the chosen valid draft is executed. Copy-on-write filesystem overlays are not implemented.
 
 ---
 

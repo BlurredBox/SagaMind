@@ -205,6 +205,69 @@ def test_contain_path_result_always_inside_root(segments: list[str]) -> None:
         try:
             result = contain_path(candidate, root=root)
             assert os.path.isabs(result)
-            assert os.path.commonpath([root, result]) == root, f"contain_path returned {result!r} escaping {root!r}"
+            real_root = os.path.realpath(root)
+            assert os.path.commonpath([real_root, result]) == real_root, (
+                f"contain_path returned {result!r} escaping {real_root!r}"
+            )
         except PathSecurityError:
             pass  # rejection is always acceptable
+
+
+# ── Compensation-contract properties ────────────────────────────────────────
+
+
+@given(
+    max_balance=st.integers(min_value=1, max_value=5),
+    max_amount=st.integers(min_value=1, max_value=5),
+)
+@h_settings(max_examples=50, deadline=2000)
+def test_bounded_contract_verifier_matches_executable_add_subtract_model(max_balance: int, max_amount: int) -> None:
+    from dataclasses import replace
+
+    from src.contracts import (
+        ArithmeticOperator,
+        Assignment,
+        BinaryExpression,
+        BoolConstant,
+        BoundedContractVerifier,
+        Comparison,
+        ComparisonOperator,
+        CompensationContract,
+        ProofStatus,
+        Transition,
+        ValueType,
+        VariableSpec,
+        input_value,
+        original,
+        state,
+    )
+
+    contract = CompensationContract(
+        name="property-add-subtract",
+        state_variables=(VariableSpec("balance", ValueType.INTEGER, minimum=0, maximum=max_balance),),
+        input_variables=(VariableSpec("amount", ValueType.INTEGER, minimum=0, maximum=max_amount),),
+        precondition=Comparison(ComparisonOperator.LE, input_value("amount"), state("balance")),
+        forward=Transition(
+            (
+                Assignment(
+                    "balance",
+                    BinaryExpression(ArithmeticOperator.SUBTRACT, state("balance"), input_value("amount")),
+                ),
+            )
+        ),
+        postcondition=BoolConstant(True),
+        compensation=Transition(
+            (
+                Assignment(
+                    "balance",
+                    BinaryExpression(ArithmeticOperator.ADD, state("balance"), input_value("amount")),
+                ),
+            )
+        ),
+        restoration=Comparison(ComparisonOperator.EQ, state("balance"), original("balance")),
+        implementation_identity="hypothesis.add-subtract:v1",
+    )
+    broken = replace(contract, compensation=contract.forward)
+
+    assert BoundedContractVerifier().verify(contract).status is ProofStatus.PROVED
+    assert BoundedContractVerifier().verify(broken).status is ProofStatus.REJECTED

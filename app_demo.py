@@ -12,12 +12,14 @@ Usage:
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from src.config import settings
 from src.memory.decay import EbbinghausMemoryManager
 from src.models import ActionPayload, MemoryNode, SagaStep
 from src.orchestrator.coordinator import SagaTransactionCoordinator
@@ -122,7 +124,7 @@ if "memory_bank" not in st.session_state:
 
 # Sidebar configuration controls
 st.sidebar.markdown("### Control Panel")
-decay_rate = st.sidebar.slider("Base Forgetting Half-Life (Hours)", 2.0, 48.0, 12.0)
+decay_rate = st.sidebar.slider("Base Decay Time Constant (Hours)", 2.0, 48.0, 12.0)
 retention_threshold = st.sidebar.slider("Eviction Threshold (τ)", 0.05, 0.5, 0.15)
 st.sidebar.markdown("---")
 st.sidebar.info("Use this control center to simulate LLM transactions, safety invariants, and cognitive sleep-cycles.")
@@ -182,8 +184,10 @@ with left_col:
         verifier = Z3Verifier()
         sandbox = WasmSandbox()
         coordinator = SagaTransactionCoordinator(verifier, sandbox)
-
-        path_invariant = '(assert (str.prefixof "/Users/Harutyun/Desktop/Portfolio1" path))'
+        saga_id = str(uuid.uuid4())
+        workspace = Path(settings.allowed_workspace_root) / "sagamind-demo" / saga_id
+        target = workspace / "setup.py"
+        path_invariant = f'(assert (str.prefixof "{workspace}" path))'
 
         if "Scenario A" in scenario:
             steps = [
@@ -192,17 +196,20 @@ with left_col:
                     step_name="Create Setup Script",
                     action=ActionPayload(
                         "WRITE_FILE",
-                        {"path": "/Users/Harutyun/Desktop/Portfolio1/setup.py", "content": "print('init')"},
+                        {"path": str(target), "content": "print('init')"},
                     ),
-                    compensation=ActionPayload("DELETE_FILE", {"path": "/Users/Harutyun/Desktop/Portfolio1/setup.py"}),
+                    compensation=ActionPayload(
+                        "RESTORE_FILE",
+                        {"path": str(target), "existed": False, "previous": ""},
+                    ),
                     invariants=path_invariant,
                 ),
                 SagaStep(
                     step_id="2",
-                    step_name="Initialize Config Database",
-                    action=ActionPayload("DATABASE_QUERY", {"query": "CREATE TABLE settings (id INT)"}),
-                    compensation=ActionPayload("DATABASE_QUERY", {"query": "DROP TABLE settings"}),
-                    invariants=path_invariant,
+                    step_name="Finalize Plan",
+                    action=ActionPayload("NOOP", {}),
+                    compensation=ActionPayload("NOOP", {}),
+                    invariants="(assert true)",
                 ),
             ]
         else:
@@ -212,9 +219,12 @@ with left_col:
                     step_name="Create App Code",
                     action=ActionPayload(
                         "WRITE_FILE",
-                        {"path": "/Users/Harutyun/Desktop/Portfolio1/main.py", "content": "# App code"},
+                        {"path": str(target), "content": "# App code"},
                     ),
-                    compensation=ActionPayload("DELETE_FILE", {"path": "/Users/Harutyun/Desktop/Portfolio1/main.py"}),
+                    compensation=ActionPayload(
+                        "RESTORE_FILE",
+                        {"path": str(target), "existed": False, "previous": ""},
+                    ),
                     invariants=path_invariant,
                 ),
                 SagaStep(
@@ -239,7 +249,7 @@ with left_col:
             time.sleep(0.8)  # Simulate processing delay
 
         # Run the saga orchestrator
-        saga_id = str(uuid.uuid4())[:8].upper()
+        coordinator.start_transaction_log(saga_id, scenario, "demo")
         res = coordinator.execute_saga(saga_id, steps, callback=log_callback)
         st.session_state.saga_status = "ROLLED_BACK" if not res else "COMMITTED"
         st.rerun()

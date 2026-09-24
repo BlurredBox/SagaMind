@@ -6,13 +6,9 @@ Runs several candidate ("draft") actions concurrently, validates each in isolati
 commits only the first that passes — overlapping the validation latency of independent
 drafts instead of paying it sequentially.
 
-Honesty note
-------------
-True copy-on-write filesystem overlays are not yet implemented (see ``improve.md`` §3.3).
-To remain safe, speculation performs **side-effect-free validation** (tool allow-list +
-path-jail containment) in parallel; the winning draft is the only one whose side effects
-are then materialised via the real sandbox at commit time. Throughput claims should be
-established by benchmark, not assumed.
+Speculation is intentionally limited to side-effect-free validation. The API hands the
+winner to the normal Saga coordinator, so durable journaling, compensation, approval,
+and recovery semantics are identical to a non-speculative step.
 """
 
 from __future__ import annotations
@@ -23,7 +19,7 @@ import uuid
 from typing import Any
 
 from src.models import ActionPayload
-from src.security import PathSecurityError, contain_path
+from src.orchestrator.sandbox import SandboxError
 
 logger = logging.getLogger("SagaMind.Speculative")
 
@@ -71,42 +67,24 @@ class SpeculativeOrchestrator:
             result["error"] = error
         return result
 
-    @staticmethod
-    def _validate(action: ActionPayload) -> tuple[bool, str]:
-        if "path" in action.arguments:
-            try:
-                contain_path(action.arguments["path"])
-            except PathSecurityError as exc:
-                return False, str(exc)
-        return True, ""
-
-    def select_and_commit(self, results: list[dict[str, Any]]) -> str | None:
-        """Commit the first successful draft and discard the rest. Returns its id."""
-        for result in results:
-            if result.get("success") and self.commit_sandbox_state(result["sandbox_id"]):
-                self._discard_others(result["sandbox_id"])
-                return str(result["sandbox_id"])
-        return None
-
-    def commit_sandbox_state(self, sandbox_id: str) -> bool:
-        """Materialise the chosen draft's side effects via the real sandbox."""
-        meta = self.active_sandboxes.get(sandbox_id)
-        if meta is None:
-            logger.error("Cannot commit state. Sandbox '%s' not found.", sandbox_id)
-            return False
-        if not meta["valid"]:
-            logger.error("Refusing to commit invalid draft '%s'.", sandbox_id)
-            return False
+    def _validate(self, action: ActionPayload) -> tuple[bool, str]:
         try:
-            self.sandbox.execute(meta["action"])
-        except Exception as exc:  # noqa: BLE001 - surface commit failure to caller
-            logger.error("Commit of sandbox '%s' failed: %s", sandbox_id, exc)
-            return False
-        meta["committed"] = True
-        logger.info("[Speculative] Committed sandbox '%s' to the host environment.", sandbox_id)
-        return True
+            self.sandbox.validate(action)
+            return True, ""
+        except (SandboxError, ValueError, TypeError) as exc:
+            return False, str(exc)
+
+    def select_winner(self, results: list[dict[str, Any]]) -> tuple[str, ActionPayload] | None:
+        """Select the first valid draft without materialising an external effect."""
+        for result in results:
+            sandbox_id = str(result["sandbox_id"])
+            meta = self.active_sandboxes.get(sandbox_id)
+            if result.get("success") and meta is not None and meta["valid"]:
+                self._discard_others(sandbox_id)
+                return sandbox_id, meta["action"]
+        return None
 
     def _discard_others(self, keep_id: str) -> None:
         for sid, meta in self.active_sandboxes.items():
-            if sid != keep_id and not meta["committed"]:
+            if sid != keep_id:
                 meta["valid"] = False

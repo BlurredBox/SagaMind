@@ -1,4 +1,8 @@
-# improve.md — Full Production Roadmap
+# improve.md — Historical Production Audit (superseded)
+
+This file preserves the original audit trail and code snippets. Its status markers and
+line references are historical; use `ROADMAP.md`, `docs/08-guarantees-and-gaps.md`, and
+`PRODUCTION_READINESS.md` for the current implementation state.
 
 End-to-end gap analysis of SagaMind. Every open item carries a severity rating, root-cause
 diagnosis, exact code location, and a concrete fix prescription. Closed items are kept for

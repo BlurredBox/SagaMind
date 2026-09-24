@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"  # noqa: S104 - bind-all is intentional for containerised deploys
     port: int = 8000
     grpc_port: int = 50051
+    grpc_tls_cert: str = ""
+    grpc_tls_key: str = ""
 
     # ── Security / API ─────────────────────────────────────────────────
     # Comma-separated list of accepted API keys. When empty, authentication is
@@ -66,6 +68,17 @@ class Settings(BaseSettings):
     # Filesystem jail root for all sandboxed writes. Defaults to the current
     # working directory so the test-suite and local runs are self-contained.
     allowed_workspace_root: str = Field(default_factory=os.getcwd)
+
+    # Built-in tools execute in a short-lived worker process by default.  The
+    # worker is a crash/resource boundary around trusted built-ins; it is not a
+    # container or microVM.  ``host`` mode exists only for deliberate local
+    # debugging and is rejected in production.
+    sandbox_execution_mode: str = "isolated"
+    sandbox_allow_host_fallback: bool = False
+    sandbox_worker_timeout_s: float = 10.0
+    sandbox_memory_limit_mb: int = 256
+    sandbox_fuel_limit: int = 1_000_000
+    sandbox_max_output_bytes: int = 65_536
 
     # When true, a failed backend connection raises instead of silently falling
     # back to the in-memory emulators. Recommended in production.
@@ -162,6 +175,7 @@ class Settings(BaseSettings):
     def model_post_init(self, __context: object) -> None:
         """Validate critical invariants once construction completes."""
         self._validate_workspace_root()
+        self._validate_sandbox()
         if self.is_production:
             self._validate_production()
 
@@ -169,6 +183,18 @@ class Settings(BaseSettings):
         root = self.allowed_workspace_root
         if not os.path.isabs(root):
             raise ValueError(f"ALLOWED_WORKSPACE_ROOT must be an absolute path, got: {root!r}")
+
+    def _validate_sandbox(self) -> None:
+        if self.sandbox_execution_mode not in {"isolated", "host"}:
+            raise ValueError("SANDBOX_EXECUTION_MODE must be 'isolated' or 'host'.")
+        if self.sandbox_worker_timeout_s <= 0:
+            raise ValueError("SANDBOX_WORKER_TIMEOUT_S must be positive.")
+        if self.sandbox_memory_limit_mb < 64:
+            raise ValueError("SANDBOX_MEMORY_LIMIT_MB must be at least 64.")
+        if self.sandbox_fuel_limit <= 0:
+            raise ValueError("SANDBOX_FUEL_LIMIT must be positive.")
+        if self.sandbox_max_output_bytes < 1_024:
+            raise ValueError("SANDBOX_MAX_OUTPUT_BYTES must be at least 1024.")
 
     def _validate_production(self) -> None:
         """Refuse to boot a production process with insecure configuration."""
@@ -179,6 +205,16 @@ class Settings(BaseSettings):
             problems.append("NEO4J_PASS is unset or using a known development default.")
         if not self.api_key_set:
             problems.append("API_KEYS must define at least one key in production.")
+        if self.sandbox_execution_mode != "isolated":
+            problems.append("SANDBOX_EXECUTION_MODE must be 'isolated' in production.")
+        if self.sandbox_allow_host_fallback:
+            problems.append("SANDBOX_ALLOW_HOST_FALLBACK must be false in production.")
+        if not self.require_backends:
+            problems.append("REQUIRE_BACKENDS must be true in production.")
+        if self.state_store_backend != "postgres":
+            problems.append("STATE_STORE_BACKEND must be 'postgres' in production.")
+        if bool(self.grpc_tls_cert) != bool(self.grpc_tls_key):
+            problems.append("GRPC_TLS_CERT and GRPC_TLS_KEY must be configured together.")
         if problems:
             raise RuntimeError(
                 "Refusing to start in production with insecure configuration:\n  - "

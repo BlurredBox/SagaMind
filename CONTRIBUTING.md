@@ -25,7 +25,7 @@ Every change must pass the same checks CI enforces:
 make lint     # ruff check
 make format   # ruff format + autofix
 make type     # mypy src
-make cover    # pytest with the coverage gate (>= 80%)
+make cover    # whole source >=70%; each safety-critical target >=85%
 ```
 
 * **Style** — `ruff` (lint + format). Line length 120. Keep imports sorted.

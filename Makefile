@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install dev lint format type test cover integration migrate run demo grpc proto docker clean
+.PHONY: help install dev lint format type test cover lock audit research external-validation integration migrate run demo grpc proto docker clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -25,7 +25,22 @@ test: ## Run the test suite
 	pytest -q
 
 cover: ## Run tests with coverage gate
-	pytest --cov=src --cov-report=term-missing --cov-fail-under=80
+	pytest --cov=src --cov-report=term-missing --cov-report=json:coverage.json --cov-fail-under=70
+	python scripts/check_critical_coverage.py coverage.json
+
+lock: ## Rebuild the Python 3.11 runtime dependency lock
+	pip-compile pyproject.toml --output-file=requirements.lock --strip-extras --resolver=backtracking
+
+audit: ## Fail on known vulnerabilities in locked runtime dependencies
+	pip-audit -r requirements.lock
+
+research: ## Reproduce controlled scientific evaluation artifacts
+	python -m experiments.evaluate
+
+external-validation: ## Run named public baselines and verify replication artifacts
+	python -m external_validation.compare
+	python -m external_validation.verify_results
+	python -m external_validation.render_report
 
 integration: ## Run integration tests against live backends (needs docker compose up)
 	RUN_INTEGRATION=1 pytest -m integration

@@ -5,6 +5,8 @@ SagaMind — Metrics Facade Tests
 The metrics facade must be safe to call whether or not prometheus_client is installed.
 """
 
+import pytest
+
 from src.observability.metrics import Metrics, span
 
 
@@ -34,3 +36,7 @@ class TestSpan:
     def test_span_is_a_noop_without_otel(self):
         with span("unit-test", attr="value"):
             pass  # must not raise even when opentelemetry is absent
+
+    def test_span_does_not_swallow_body_exception(self):
+        with pytest.raises(RuntimeError, match="boom"), span("failing"):
+            raise RuntimeError("boom")

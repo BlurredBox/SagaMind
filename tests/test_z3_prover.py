@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
+from src.config import settings
 from src.verifier.z3_prover import Z3Verifier
 
 # ─────────────────────────────────────────────────────────────────────
@@ -40,8 +41,8 @@ class TestPathPrefixVerification:
     def test_path_prefix_safe(self, verifier):
         """Path inside the authorised workspace root returns (True, ...)."""
         ok, msg = verifier.verify(
-            {"path": "/Users/Harutyun/Desktop/Portfolio1/src/main.py"},
-            '(assert (str.prefixof "/Users/Harutyun/Desktop/Portfolio1" path))',
+            {"path": f"{settings.allowed_workspace_root}/src/main.py"},
+            f'(assert (str.prefixof "{settings.allowed_workspace_root}" path))',
         )
         assert ok is True
 
@@ -57,16 +58,15 @@ class TestPathPrefixVerification:
     def test_path_traversal_attack(self, verifier):
         """Traversal attempt via ../../ is rejected."""
         ok, _ = verifier.verify(
-            {"path": "/Users/Harutyun/Desktop/Portfolio1/../../etc/shadow"},
-            '(assert (str.prefixof "/Users/Harutyun/Desktop/Portfolio1" path))',
+            {"path": f"{settings.allowed_workspace_root}/../../etc/shadow"},
+            f'(assert (str.prefixof "{settings.allowed_workspace_root}" path))',
         )
-        # The prefix still matches so fallback considers it safe
-        assert ok is True  # string-prefix semantics; traversal is a different layer
+        assert ok is False
 
     def test_path_exact_root(self, verifier):
         """Exact root path is considered safe."""
         ok, _ = verifier.verify(
-            {"path": "/Users/Harutyun/Desktop/Portfolio1"},
+            {"path": settings.allowed_workspace_root},
             "",
         )
         assert ok is True
@@ -86,7 +86,7 @@ class TestNonPathArguments:
             "",
         )
         assert ok is True
-        assert "Mock Validation" in msg or "Success" in msg
+        assert "succeeded" in msg.lower()
 
     def test_empty_arguments_pass(self, verifier):
         ok, _ = verifier.verify({}, "")
@@ -125,7 +125,7 @@ class TestEmptyInvariants:
     """Empty or whitespace-only invariant strings are handled gracefully."""
 
     def test_empty_invariants(self, verifier):
-        ok, _ = verifier.verify({"path": "/Users/Harutyun/Desktop/Portfolio1/x"}, "")
+        ok, _ = verifier.verify({"path": f"{settings.allowed_workspace_root}/x"}, "")
         assert ok is True
 
     def test_whitespace_only_invariants(self, verifier):
@@ -135,7 +135,7 @@ class TestEmptyInvariants:
     def test_none_safe_path_with_empty_invariants(self, verifier):
         """Safe path + empty invariants → should pass."""
         ok, _ = verifier.verify(
-            {"path": "/Users/Harutyun/Desktop/Portfolio1/data.json"},
+            {"path": f"{settings.allowed_workspace_root}/data.json"},
             "",
         )
         assert ok is True

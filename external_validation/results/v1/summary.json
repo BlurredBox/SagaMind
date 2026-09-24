@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-09-24T13:08:57.136747+00:00",
+  "revision": "06ef2b1cb4e77e0bebdba2ba3209ffa157d88085",
+  "working_tree_dirty": true,
+  "evaluated_source_sha256": "9d814528cd9fa5998df78b90bdd324274fc5b54a88436a6e6a159d3720489150",
+  "protocol_file_sha256": "c97274ef6ecad33b0dfaa631a091c437b60de3f212ff2778340f40dac5c30575",
+  "corpus_file_sha256": "a68da322d9a4a76aad9426a82eab8046c22c14ed3ba8135aaa9c601897cdd37e",
+  "requirements_lock_sha256": "9777c0a57175d7213c90dea9ee765a32e5d9203c553bcaa517d7d9edf2c2786e",
+  "corpus_sha256": "144b2381ac6a71bcff52df3c4914e39eb67a34fa33703023beb47646ac6ff477",
+  "case_count_per_system": 200,
+  "environment": {
+    "python": "3.11.1",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "temporalio": "1.33.0",
+    "langgraph": "1.2.12"
+  },
+  "scope": "Native documented capability comparison on filesystem failure semantics; not an end-to-end agent-quality or general framework leaderboard.",
+  "systems": {
+    "sagamind_full": {
+      "configuration": "SagaMind compensation plus typed path invariant",
+      "capabilities_under_test": [
+        "compensation",
+        "pre-effect path verification"
+      ]
+    },
+    "temporal_saga": {
+      "configuration": "Temporal Saga pattern with reverse-order Activity compensations",
+      "capabilities_under_test": [
+        "compensation"
+      ],
+      "not_configured": [
+        "application path policy"
+      ]
+    },
+    "langgraph_checkpoint": {
+      "configuration": "LangGraph StateGraph with InMemorySaver checkpoints",
+      "capabilities_under_test": [
+        "graph-state checkpointing"
+      ],
+      "not_configured": [
+        "external-effect compensation",
+        "application path policy"
+      ]
+    }
+  },
+  "aggregates": {
+    "langgraph_checkpoint": {
+      "trials": 200,
+      "safe_outcome_rate": 0.0,
+      "safe_outcome_rate_95ci": [
+        1.734723475976807e-18,
+        0.018845326377266575
+      ],
+      "runtime_failure_recovery_rate": 0.0,
+      "unsafe_path_block_rate": 0.0,
+      "residual_effects": 200,
+      "unsafe_executions": 100,
+      "median_latency_ms": 1.7854999999999999,
+      "p95_latency_ms": 2.523
+    },
+    "sagamind_full": {
+      "trials": 200,
+      "safe_outcome_rate": 1.0,
+      "safe_outcome_rate_95ci": [
+        0.9811546736227335,
+        1.0
+      ],
+      "runtime_failure_recovery_rate": 1.0,
+      "unsafe_path_block_rate": 1.0,
+      "residual_effects": 0,
+      "unsafe_executions": 0,
+      "median_latency_ms": 2.442625,
+      "p95_latency_ms": 3.095917
+    },
+    "temporal_saga": {
+      "trials": 200,
+      "safe_outcome_rate": 0.5,
+      "safe_outcome_rate_95ci": [
+        0.43136085960389187,
+        0.5686391403961082
+      ],
+      "runtime_failure_recovery_rate": 1.0,
+      "unsafe_path_block_rate": 0.0,
+      "residual_effects": 0,
+      "unsafe_executions": 100,
+      "median_latency_ms": 12.6767085,
+      "p95_latency_ms": 14.966542
+    }
+  },
+  "paired_vs_sagamind": {
+    "temporal_saga": {
+      "sagamind_only": 100,
+      "baseline_only": 0,
+      "exact_two_sided_p": 1.5777218104420236e-30
+    },
+    "langgraph_checkpoint": {
+      "sagamind_only": 200,
+      "baseline_only": 0,
+      "exact_two_sided_p": 1.2446030555722283e-60
+    }
+  },
+  "acceptance": {
+    "same_cases_for_every_system": true,
+    "balanced_failure_classes": true,
+    "sagamind_claim_reproduced": true,
+    "temporal_saga_recovery_observed": true,
+    "langgraph_checkpoint_does_not_undo_external_effects": true,
+    "all_passed": true
+  }
+}

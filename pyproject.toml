@@ -7,7 +7,7 @@ name = "sagamind"
 version = "1.0.0"
 description = "Transaction-safe multi-agent runtime and cognitive memory co-processor"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.10"
 authors = [
     {name = "SagaMind Contributors"},
@@ -24,7 +24,6 @@ keywords = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -43,6 +42,7 @@ dependencies = [
     "psycopg2-binary>=2.9.6",
     "pgvector>=0.2.0",
     "neo4j>=5.8.0",
+    "httpx>=0.24.0",
 ]
 
 [project.optional-dependencies]
@@ -54,6 +54,8 @@ dev = [
     "ruff>=0.6.0",
     "mypy>=1.5.0",
     "hypothesis>=6.100.0",
+    "pip-audit>=2.9.0",
+    "pip-tools>=7.5.0",
 ]
 dashboard = [
     "streamlit>=1.25.0",
@@ -65,9 +67,9 @@ wasm = [
     "wasmtime>=12.0.0",
 ]
 grpc = [
-    "grpcio>=1.54.0",
-    "grpcio-tools>=1.54.0",
-    "protobuf>=4.21.0",
+    "grpcio>=1.84.0",
+    "grpcio-tools>=1.84.0",
+    "protobuf>=7.35.1",
 ]
 llm = [
     "openai>=1.0.0",
@@ -108,7 +110,7 @@ Issues = "https://github.com/sagamind/sagamind/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src*"]
+include = ["src*", "sdk*"]
 
 [tool.setuptools.package-data]
 src = ["py.typed"]
@@ -124,7 +126,7 @@ markers = [
 
 [tool.coverage.run]
 source = ["src"]
-omit = ["src/grpc_server.py", "src/generated/*"]
+omit = ["src/grpc_server.py", "src/generated/*", "src/orchestrator/temporal_worker.py"]
 
 [tool.coverage.report]
 show_missing = true
@@ -132,12 +134,14 @@ show_missing = true
 [tool.ruff]
 target-version = "py310"
 line-length = 120
+extend-exclude = ["*.md", "src/generated"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "SIM"]
 
 [tool.mypy]
 python_version = "3.10"
+mypy_path = "typings"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
@@ -155,10 +159,13 @@ module = [
     "grpc",
     "tenacity",
     "apscheduler.*",
-    "sklearn.*",
     "src.generated.*",
     "temporalio.*",
     "sagamind_native",
     "mcp.*",
+    "redis",
+    "prometheus_client",
+    "opentelemetry.*",
 ]
 ignore_missing_imports = true
+disable_error_code = ["import-untyped"]

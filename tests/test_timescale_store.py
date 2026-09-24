@@ -56,3 +56,18 @@ class TestRetrieveActiveMemories:
         store = _make_store_with_memories()
         active = store.retrieve_active_memories("t1", [1.0, 0.0], s_init=12.0, gamma=0.45, tau=0.0)
         assert {m["memory_id"] for m in active} == {"fresh", "stale"}
+
+    def test_retrieval_reinforces_selected_memory(self):
+        store = _make_store_with_memories()
+        previous = store.fallback_storage[0]["last_retrieved_at"]
+
+        store.mark_retrieved(["fresh"])
+
+        assert store.fallback_storage[0]["retrieval_count"] == 6
+        assert store.fallback_storage[0]["last_retrieved_at"] >= previous
+        assert store.fallback_storage[1]["retrieval_count"] == 0
+
+    def test_list_tenants_is_unique_and_sorted(self):
+        store = _make_store_with_memories()
+        store.fallback_storage.append({**store.fallback_storage[0], "tenant_id": "a"})
+        assert store.list_tenants() == ["a", "t1"]

@@ -16,18 +16,49 @@ Method (the academically correct refutation procedure)
    * ``unknown``/timeout → **fail closed** (reject).
 
 When the ``z3-solver`` package is absent the verifier degrades to a conservative semantic
-guard that enforces only the workspace path-prefix property (string-prefix abstraction;
-true path containment is enforced separately in the sandbox).
+guard that enforces only canonical workspace path containment.  The structured
+``verify_detailed`` API rejects non-empty SMT policies when no solver is available.
 """
 
 from __future__ import annotations
 
+import enum
 import logging
+import re
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from src.config import settings
+from src.security import PathSecurityError, contain_path
 
 logger = logging.getLogger("SagaMind.Verifier.Z3")
+
+
+class VerificationStatus(str, enum.Enum):
+    """Machine-readable outcome for policy verification."""
+
+    SAFE = "safe"
+    REJECTED = "rejected"
+    UNKNOWN = "unknown"
+    UNSUPPORTED = "unsupported"
+    INVALID = "invalid"
+
+
+@dataclass(frozen=True)
+class PolicyVerificationResult:
+    """Structured policy result for counterexample-guided agent repair."""
+
+    allowed: bool
+    status: VerificationStatus
+    explanation: str
+    violated_property: str | None = None
+    counterexample: dict[str, Any] | None = None
+    repair_constraints: tuple[dict[str, Any], ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        result = asdict(self)
+        result["status"] = self.status.value
+        return result
 
 
 class Z3Verifier:
@@ -51,6 +82,36 @@ class Z3Verifier:
         if not self.z3_active:
             return self._fallback_verify(action_args)
         return self._z3_verify(action_args, invariants_string)
+
+    def verify_detailed(self, action_args: dict[str, Any], invariants_string: str) -> PolicyVerificationResult:
+        """Verify a policy with explicit fail-closed statuses and repair data.
+
+        Unlike the compatibility ``verify`` method, this API never silently skips
+        unsupported values and never treats an unavailable solver as a proof.
+        """
+
+        unsupported = sorted(key for key, value in action_args.items() if not self._supported_scalar(value))
+        if unsupported:
+            return PolicyVerificationResult(
+                allowed=False,
+                status=VerificationStatus.UNSUPPORTED,
+                explanation=f"Unsupported action argument types for: {', '.join(unsupported)}; rejected.",
+            )
+        if not invariants_string or not invariants_string.strip():
+            ok, explanation = self._fallback_verify(action_args)
+            return PolicyVerificationResult(
+                allowed=ok,
+                status=VerificationStatus.SAFE if ok else VerificationStatus.REJECTED,
+                explanation=explanation,
+            )
+        if not self.z3_active:
+            return PolicyVerificationResult(
+                allowed=False,
+                status=VerificationStatus.UNKNOWN,
+                explanation="SMT solver is unavailable; non-empty policy rejected without a proof.",
+                violated_property=invariants_string,
+            )
+        return self._z3_verify_detailed(action_args, invariants_string)
 
     # ── Z3 path ─────────────────────────────────────────────────────────
     def _z3_verify(self, action_args: dict[str, Any], invariants_string: str) -> tuple[bool, str]:
@@ -88,6 +149,56 @@ class Z3Verifier:
         logger.warning("Z3 returned 'unknown' (timeout=%dms). Failing closed.", settings.z3_timeout_ms)
         return False, "SMT solver could not resolve the invariant within the timeout; rejected."
 
+    def _z3_verify_detailed(self, action_args: dict[str, Any], invariants_string: str) -> PolicyVerificationResult:
+        import z3
+
+        solver = z3.Solver()
+        solver.set("timeout", settings.z3_timeout_ms)
+        decls = {key: self._declare(z3, key, value) for key, value in action_args.items()}
+        for key, variable in decls.items():
+            solver.add(variable == self._literal(z3, action_args[key]))
+        try:
+            assertions = z3.parse_smt2_string(invariants_string, decls=decls)
+        except z3.Z3Exception as exc:
+            return PolicyVerificationResult(
+                allowed=False,
+                status=VerificationStatus.INVALID,
+                explanation=f"Policy is invalid SMT-LIB2 and was rejected: {exc}",
+                violated_property=invariants_string,
+            )
+        if len(assertions) == 0:
+            return PolicyVerificationResult(
+                allowed=False,
+                status=VerificationStatus.INVALID,
+                explanation="Policy contains no assertions; rejected.",
+                violated_property=invariants_string,
+            )
+        invariant = z3.And(*assertions) if len(assertions) > 1 else assertions[0]
+        solver.add(z3.Not(invariant))
+        outcome = solver.check()
+        if outcome == z3.unsat:
+            return PolicyVerificationResult(
+                allowed=True,
+                status=VerificationStatus.SAFE,
+                explanation="Verification successful.",
+            )
+        if outcome == z3.sat:
+            counterexample = dict(action_args)
+            return PolicyVerificationResult(
+                allowed=False,
+                status=VerificationStatus.REJECTED,
+                explanation="Safety constraint violation.",
+                violated_property=invariants_string,
+                counterexample=counterexample,
+                repair_constraints=tuple(_derive_repair_constraints(invariants_string, action_args)),
+            )
+        return PolicyVerificationResult(
+            allowed=False,
+            status=VerificationStatus.UNKNOWN,
+            explanation="SMT solver returned unknown or timed out; rejected.",
+            violated_property=invariants_string,
+        )
+
     @staticmethod
     def _declare(z3: Any, key: str, val: Any) -> Any:
         if isinstance(val, bool):
@@ -97,6 +208,10 @@ class Z3Verifier:
         if isinstance(val, (int, float)):
             return z3.Real(key)
         return None
+
+    @staticmethod
+    def _supported_scalar(value: Any) -> bool:
+        return isinstance(value, (bool, int, float, str))
 
     @staticmethod
     def _literal(z3: Any, val: Any) -> Any:
@@ -123,12 +238,64 @@ class Z3Verifier:
 
     # ── Fallback path (z3 unavailable) ──────────────────────────────────
     def _fallback_verify(self, action_args: dict[str, Any]) -> tuple[bool, str]:
-        """Conservative semantic guard: workspace path-prefix check only."""
+        """Conservative semantic guard using canonical filesystem containment."""
         if "path" in action_args:
             path = action_args["path"]
-            allowed_root = settings.allowed_workspace_root
-            if not path.startswith(allowed_root):
-                return False, (
-                    f"Semantic Guard Fail: Path '{path}' accesses files outside authorized workspace '{allowed_root}'."
-                )
-        return True, "Mock Validation Success (Solver bypassed)"
+            try:
+                contain_path(path, root=settings.allowed_workspace_root)
+            except (PathSecurityError, TypeError) as exc:
+                return False, f"Semantic Guard Fail: {exc}"
+        return True, "Semantic validation succeeded (SMT solver unavailable)."
+
+
+_SIMPLE_COMPARISON = re.compile(
+    r"\((<=|<|>=|>|=)\s+([A-Za-z_][A-Za-z0-9_]*)\s+"
+    r"([A-Za-z_][A-Za-z0-9_]*|-?\d+(?:\.\d+)?)\)"
+)
+
+
+def _derive_repair_constraints(invariants_string: str, action_args: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract useful retry bounds from simple violated SMT comparisons.
+
+    Arbitrary SMT remains supported by the solver.  For predicates outside this
+    deliberately conservative subset the result still includes a counterexample,
+    but does not invent a potentially wrong repair.
+    """
+
+    constraints: list[dict[str, Any]] = []
+    operator_names = {
+        "<=": "maximum",
+        "<": "exclusiveMaximum",
+        ">=": "minimum",
+        ">": "exclusiveMinimum",
+        "=": "const",
+    }
+    for operator, field, raw_limit in _SIMPLE_COMPARISON.findall(invariants_string):
+        if field not in action_args:
+            continue
+        if raw_limit in action_args:
+            limit: Any = {"field": raw_limit}
+            concrete_limit = action_args[raw_limit]
+        else:
+            limit = float(raw_limit) if "." in raw_limit else int(raw_limit)
+            concrete_limit = limit
+        try:
+            violated = {
+                "<=": action_args[field] > concrete_limit,
+                "<": action_args[field] >= concrete_limit,
+                ">=": action_args[field] < concrete_limit,
+                ">": action_args[field] <= concrete_limit,
+                "=": action_args[field] != concrete_limit,
+            }[operator]
+        except TypeError:
+            continue
+        if violated:
+            constraints.append(
+                {
+                    "field": field,
+                    "constraint": operator_names[operator],
+                    "value": limit,
+                    "predicate": f"{field} {operator} {raw_limit}",
+                }
+            )
+    return constraints

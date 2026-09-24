@@ -87,6 +87,7 @@ services:
       NEO4J_USER: ${NEO4J_USER}
       NEO4J_PASS: ${NEO4J_PASS}
       REDIS_HOST: redis
+      STATE_STORE_BACKEND: postgres
       API_KEYS: ${API_KEYS:?set API_KEYS in .env}
       ALLOWED_WORKSPACE_ROOT: /app/workspace
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

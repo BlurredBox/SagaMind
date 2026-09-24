@@ -195,6 +195,8 @@ class TimescaleMemoryStore:
         except Exception as exc:  # noqa: BLE001
             conn.rollback()
             logger.error("Failed to write memory to TimescaleDB: %s", exc)
+            if settings.require_backends:
+                raise RuntimeError("TimescaleDB memory write failed") from exc
         finally:
             self.pool.putconn(conn)
 
@@ -232,6 +234,57 @@ class TimescaleMemoryStore:
         finally:
             self.pool.putconn(conn)
         return memories
+
+    def mark_retrieved(self, memory_ids: list[str]) -> None:
+        """Atomically reinforce retrieved memories and refresh their access time."""
+        if not memory_ids:
+            return
+        now = datetime.now(timezone.utc)
+        if not self.pool_active:
+            wanted = set(memory_ids)
+            for item in self.fallback_storage:
+                if str(item["memory_id"]) in wanted:
+                    item["retrieval_count"] += 1
+                    item["last_retrieved_at"] = now
+            return
+
+        conn = self.pool.getconn()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE episodic_memories
+                    SET retrieval_count = retrieval_count + 1,
+                        last_retrieved_at = now()
+                    WHERE memory_id = ANY(%s::uuid[]);
+                    """,
+                    (memory_ids,),
+                )
+                conn.commit()
+        except Exception as exc:  # noqa: BLE001
+            conn.rollback()
+            logger.error("Failed to reinforce retrieved memories: %s", exc)
+            if settings.require_backends:
+                raise RuntimeError("TimescaleDB retrieval reinforcement failed") from exc
+        finally:
+            self.pool.putconn(conn)
+
+    def list_tenants(self) -> list[str]:
+        """Return tenants with stored memories for scheduled consolidation."""
+        if not self.pool_active:
+            return sorted({str(item["tenant_id"]) for item in self.fallback_storage})
+        conn = self.pool.getconn()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT DISTINCT tenant_id FROM episodic_memories ORDER BY tenant_id;")
+                return [str(row[0]) for row in cursor.fetchall()]
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Failed to enumerate memory tenants: %s", exc)
+            if settings.require_backends:
+                raise RuntimeError("TimescaleDB tenant enumeration failed") from exc
+            return []
+        finally:
+            self.pool.putconn(conn)
 
     def retrieve_active_memories(
         self,

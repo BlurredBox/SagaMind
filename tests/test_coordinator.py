@@ -31,11 +31,16 @@ class TestStartTransaction:
         assert saga.completed_steps == []
         assert saga.start_time > 0
 
-    def test_start_transaction_idempotent_overwrite(self, coordinator):
-        """Calling start twice overwrites the previous saga entry."""
+    def test_start_transaction_rejects_duplicate_id(self, coordinator):
+        """A duplicate ID cannot erase a running saga's state."""
+        import pytest
+
+        from src.orchestrator.coordinator import CoordinatorError
+
         coordinator.start_transaction_log("saga-200", "goal-1", "t1")
-        coordinator.start_transaction_log("saga-200", "goal-2", "t2")
-        assert coordinator.active_sagas["saga-200"].goal == "goal-2"
+        with pytest.raises(CoordinatorError, match="already exists"):
+            coordinator.start_transaction_log("saga-200", "goal-2", "t2")
+        assert coordinator.active_sagas["saga-200"].goal == "goal-1"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -197,6 +202,36 @@ class TestRollbackOnExecutionException:
         result = coord.execute_saga("saga-err", [step])
         assert result is False
         assert "bad input" in step.error
+
+    def test_unsuccessful_sandbox_result_triggers_rollback(self, mock_verifier, mock_sandbox):
+        """A typed failure result is a failed step, not a commit."""
+        from src.models import SandboxResult
+        from src.orchestrator.coordinator import SagaTransactionCoordinator
+
+        mock_sandbox.execute = MagicMock(
+            side_effect=[
+                SandboxResult(success=True),
+                SandboxResult(success=False, status="REJECTED", error="policy denied"),
+            ]
+        )
+        coord = SagaTransactionCoordinator(mock_verifier, mock_sandbox)
+        coord.start_transaction_log("saga-result-fail", "result failure", "t1")
+        steps = [
+            SagaStep(
+                step_id=f"s{i}",
+                step_name=f"step-{i}",
+                action=ActionPayload(tool_name=f"T{i}", arguments={}),
+                compensation=ActionPayload(tool_name=f"C{i}", arguments={}),
+                invariants="",
+            )
+            for i in range(2)
+        ]
+
+        assert coord.execute_saga("saga-result-fail", steps) is False
+        assert steps[0].status == "ROLLED_BACK"
+        assert steps[1].status == "FAILED"
+        assert "policy denied" in steps[1].error
+        mock_sandbox.execute_compensation.assert_called_once()
 
 
 # ─────────────────────────────────────────────────────────────────────

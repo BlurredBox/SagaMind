@@ -18,11 +18,13 @@ Security posture
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from contextvars import ContextVar
-from typing import Any, Literal
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 import uvicorn
 from fastapi import (
@@ -38,7 +40,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.config import settings
 from src.logging_config import configure_logging, get_logger
@@ -48,11 +50,12 @@ from src.memory.embedding import EmbeddingService
 from src.memory.neo4j_store import Neo4jGraphStore
 from src.memory.timescale_store import TimescaleMemoryStore
 from src.models import ActionPayload, SagaStep
-from src.observability import metrics
+from src.observability import metrics, span
 from src.orchestrator.coordinator import CoordinatorError, SagaTransactionCoordinator
 from src.orchestrator.sandbox import WasmSandbox
 from src.orchestrator.state_store import SagaStateStore
-from src.security import rate_limiter
+from src.request_context import request_id
+from src.security import PathSecurityError, contain_path, rate_limiter
 from src.speculative.orchestrator import SpeculativeOrchestrator
 from src.verifier.z3_prover import Z3Verifier
 
@@ -69,12 +72,6 @@ except ImportError:
     pass
 
 # ─────────────────────────────────────────────────────────────────────
-# Request-ID context variable (propagated through all log lines)
-# ─────────────────────────────────────────────────────────────────────
-
-_request_id: ContextVar[str] = ContextVar("request_id", default="")
-
-# ─────────────────────────────────────────────────────────────────────
 # Service singletons
 # ─────────────────────────────────────────────────────────────────────
 
@@ -88,6 +85,12 @@ memory_manager = EbbinghausMemoryManager()
 consolidator = MemoryConsolidator(timescale, neo4j)
 embedding_service = EmbeddingService()
 speculative = SpeculativeOrchestrator(sandbox)
+
+
+def consolidate_all_tenants() -> None:
+    """Run one consolidation cycle for each real tenant in the memory store."""
+    for tenant_id in timescale.list_tenants():
+        consolidator.run_consolidation_cycle(tenant_id)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -109,12 +112,14 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
             logger.warning("Recovered (rolled back) %d incomplete saga(s) on startup.", recovered)
     except Exception as exc:  # noqa: BLE001
         logger.error("Saga recovery on startup failed: %s", exc)
+        if settings.require_backends or settings.is_production:
+            raise
 
     if _scheduler is not None and settings.consolidation_cron:
         try:
             minute, hour, day, month, day_of_week = settings.consolidation_cron.split()
             _scheduler.add_job(
-                func=lambda: consolidator.run_consolidation_cycle("*"),
+                func=consolidate_all_tenants,
                 trigger="cron",
                 minute=minute,
                 hour=hour,
@@ -165,22 +170,39 @@ if settings.cors_origin_list:
 async def inject_request_id(request: Request, call_next: Any) -> Any:
     """Stamp every request with a correlation ID visible in all downstream log lines."""
     rid = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:12]
-    token = _request_id.set(rid)
-    response = await call_next(request)
-    response.headers["X-Request-ID"] = rid
-    _request_id.reset(token)
-    return response
+    token = request_id.set(rid)
+    try:
+        with span("http.request", method=request.method, route=request.url.path, request_id=rid):
+            response = await call_next(request)
+        response.headers["X-Request-ID"] = rid
+        return response
+    finally:
+        request_id.reset(token)
 
 
 @app.middleware("http")
 async def limit_body_size(request: Request, call_next: Any) -> Any:
     """Reject oversized request bodies before they are buffered."""
     content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > settings.max_request_bytes:
+    try:
+        declared_size = int(content_length) if content_length is not None else None
+    except ValueError:
         return JSONResponse(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": "Invalid Content-Length header."},
+        )
+    if declared_size is not None and (declared_size < 0 or declared_size > settings.max_request_bytes):
+        return JSONResponse(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             content={"detail": "Request body too large."},
         )
+    if content_length is None and request.method in {"POST", "PUT", "PATCH"}:
+        body = await request.body()
+        if len(body) > settings.max_request_bytes:
+            return JSONResponse(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                content={"detail": "Request body too large."},
+            )
     return await call_next(request)
 
 
@@ -234,8 +256,12 @@ _PROTECTED = [Depends(require_api_key), Depends(enforce_rate_limit)]
 
 
 class WriteFileArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     path: str
     content: str = ""
+    expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    expected_absent: bool | None = None
 
     @field_validator("path")
     @classmethod
@@ -245,48 +271,102 @@ class WriteFileArgs(BaseModel):
         return v
 
 
-class DatabaseQueryArgs(BaseModel):
-    table: str
-    operation: Literal["SELECT", "INSERT", "UPDATE", "DELETE"]
-    filters: dict[str, Any] = Field(default_factory=dict)
+class DeleteFileArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-    @field_validator("table")
+    path: str
+    expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    expected_absent: bool | None = None
+
+    @field_validator("path")
     @classmethod
-    def table_alphanum(cls, v: str) -> str:
-        if not v.replace("_", "").isalnum():
-            raise ValueError("table name must be alphanumeric (underscores allowed)")
+    def path_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("path must not be empty")
         return v
 
 
 class NoopArgs(BaseModel):
-    pass
+    model_config = ConfigDict(extra="forbid")
 
 
-_TOOL_ARG_SCHEMAS: dict[str, type[BaseModel]] = {
+_ACTION_ARG_SCHEMAS: dict[str, type[BaseModel]] = {
     "WRITE_FILE": WriteFileArgs,
-    "DATABASE_QUERY": DatabaseQueryArgs,
     "NOOP": NoopArgs,
-    "DELETE_FILE": WriteFileArgs,
+    "DELETE_FILE": DeleteFileArgs,
 }
 
-_ALLOWED_TOOLS = frozenset(_TOOL_ARG_SCHEMAS)
+_COMPENSATION_ARG_SCHEMAS: dict[str, type[BaseModel]] = {
+    "RESTORE_FILE": BaseModel,
+    "DELETE_FILE": DeleteFileArgs,
+    "NOOP": NoopArgs,
+}
 
 
-def _validate_tool_args(tool_name: str, arguments: dict[str, Any]) -> None:
+class RestoreFileArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    existed: bool
+    previous: str = Field(max_length=1_000_000)
+    expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    expected_absent: bool | None = None
+
+
+_COMPENSATION_ARG_SCHEMAS["RESTORE_FILE"] = RestoreFileArgs
+
+
+def _validate_tool_args(tool_name: str, arguments: dict[str, Any], *, compensation: bool = False) -> dict[str, Any]:
     """Validate tool arguments against the registered schema. Raises HTTPException on failure."""
-    if tool_name not in _ALLOWED_TOOLS:
+    schemas = _COMPENSATION_ARG_SCHEMAS if compensation else _ACTION_ARG_SCHEMAS
+    if tool_name not in schemas:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Unknown tool '{tool_name}'. Allowed: {sorted(_ALLOWED_TOOLS)}",
+            detail=(
+                f"Unknown {'compensation' if compensation else 'action'} tool '{tool_name}'. Allowed: {sorted(schemas)}"
+            ),
         )
-    schema = _TOOL_ARG_SCHEMAS[tool_name]
+    schema = schemas[tool_name]
     try:
-        schema(**arguments)
+        return schema(**arguments).model_dump(exclude_none=True)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Invalid arguments for tool '{tool_name}': {exc}",
         ) from exc
+
+
+def _derive_file_contract(tool_name: str, arguments: dict[str, Any]) -> tuple[dict[str, Any], ActionPayload]:
+    """Capture an exact preimage and bind forward/rollback operations to hashes."""
+    try:
+        safe_path = Path(contain_path(str(arguments["path"])))
+        existed = safe_path.is_file()
+        previous = safe_path.read_text(encoding="utf-8") if existed else ""
+    except (OSError, UnicodeError, PathSecurityError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    if len(previous) > 1_000_000:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="File is too large for the built-in exact rollback contract.",
+        )
+    before_hash = hashlib.sha256(previous.encode()).hexdigest() if existed else None
+    guarded = dict(arguments)
+    guarded.pop("expected_sha256", None)
+    guarded.pop("expected_absent", None)
+    if existed:
+        guarded["expected_sha256"] = before_hash
+    else:
+        guarded["expected_absent"] = True
+    compensation_args: dict[str, Any] = {
+        "path": str(safe_path),
+        "existed": existed,
+        "previous": previous,
+    }
+    if tool_name == "WRITE_FILE":
+        compensation_args["expected_sha256"] = hashlib.sha256(guarded["content"].encode()).hexdigest()
+    else:
+        compensation_args["expected_absent"] = True
+    return guarded, ActionPayload("RESTORE_FILE", compensation_args)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -299,24 +379,38 @@ class StartSagaRequest(BaseModel):
     goal: str
 
 
+class MemoryIngestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: str = Field(min_length=1, max_length=50)
+    agent_role: str = Field(min_length=1, max_length=50)
+    summary: str = Field(min_length=1, max_length=20_000)
+    importance: float = Field(ge=0.0, le=1.0)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
 class StepProposal(BaseModel):
     saga_id: str
     step_name: str
     tool_name: str
     arguments: dict[str, Any]
-    compensation_tool: str
-    compensation_arguments: dict[str, Any]
+    compensation_tool: str | None = None
+    compensation_arguments: dict[str, Any] = Field(default_factory=dict)
     invariants: str
     idempotency_key: str | None = None
     requires_approval: bool = False
 
 
 class DraftProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     command: str
-    arguments: dict[str, Any] = {}
+    arguments: dict[str, Any] = Field(default_factory=dict)
 
 
 class SpeculativeRequest(BaseModel):
+    tenant_id: str = Field(min_length=1, max_length=50)
+    goal: str = Field(default="speculative action", min_length=1, max_length=500)
     drafts: list[DraftProposal]
 
 
@@ -334,13 +428,55 @@ class HealthResponse(BaseModel):
 
 @app.get("/health", response_model=HealthResponse)
 def health_check() -> HealthResponse:
-    """Liveness + readiness probe reporting per-backend mode."""
-    backends = {
+    """Process liveness probe. Use ``/ready`` for dependency readiness."""
+    return HealthResponse(
+        status="HEALTHY",
+        environment=settings.env,
+        version="1.0.0",
+        backends=_backend_status(),
+    )
+
+
+def _backend_status() -> dict[str, str]:
+    """Return truthful backend and execution-boundary modes."""
+    return {
         "timescale": "live" if getattr(timescale, "pool_active", False) else "fallback",
         "neo4j": "live" if getattr(neo4j, "active", False) else "fallback",
         "verifier": "z3" if getattr(verifier, "z3_active", False) else "semantic-fallback",
-        "wasm": "live" if getattr(sandbox, "engine", None) else "host-fallback",
+        "isolation": "isolated-worker" if sandbox.execution_mode == "isolated" else "host-development-fallback",
+        "wasi": "live" if getattr(sandbox, "engine", None) else "unavailable",
+        "wasm": "live" if getattr(sandbox, "engine", None) else "unavailable",
         "saga_store": saga_store.backend,
+    }
+
+
+@app.get("/ready", response_model=HealthResponse)
+def readiness_check(response: Response) -> HealthResponse:
+    """Dependency readiness probe; production never accepts fallback backends."""
+    backends = _backend_status()
+    required = (
+        backends["timescale"] == "live"
+        and backends["neo4j"] == "live"
+        and backends["verifier"] == "z3"
+        and backends["isolation"] == "isolated-worker"
+        and backends["saga_store"] == "postgres"
+    )
+    ready = required if (settings.is_production or settings.require_backends) else True
+    if not ready:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return HealthResponse(
+        status="READY" if ready else "NOT_READY",
+        environment=settings.env,
+        version="1.0.0",
+        backends=backends,
+    )
+
+
+@app.get("/health/backends", response_model=HealthResponse, include_in_schema=False)
+def backend_health_details() -> HealthResponse:
+    """Backward-compatible backend detail endpoint for operators."""
+    backends = {
+        **_backend_status(),
     }
     return HealthResponse(
         status="HEALTHY",
@@ -379,14 +515,23 @@ def submit_step(payload: StepProposal, bound_tenant: str | None = Depends(get_bo
     saga = _get_saga_or_404(payload.saga_id)
     enforce_tenant_access(bound_tenant, saga.tenant_id)
 
-    _validate_tool_args(payload.tool_name, payload.arguments)
-    _validate_tool_args(payload.compensation_tool, payload.compensation_arguments)
+    action_arguments = _validate_tool_args(payload.tool_name, payload.arguments)
+    if payload.tool_name in {"WRITE_FILE", "DELETE_FILE"}:
+        action_arguments, compensation = _derive_file_contract(payload.tool_name, action_arguments)
+    else:
+        compensation_tool = payload.compensation_tool or "NOOP"
+        compensation_arguments = _validate_tool_args(
+            compensation_tool,
+            payload.compensation_arguments,
+            compensation=True,
+        )
+        compensation = ActionPayload(compensation_tool, compensation_arguments)
 
     step = SagaStep(
         step_id=str(uuid.uuid4()),
         step_name=payload.step_name,
-        action=ActionPayload(payload.tool_name, payload.arguments),
-        compensation=ActionPayload(payload.compensation_tool, payload.compensation_arguments),
+        action=ActionPayload(payload.tool_name, action_arguments),
+        compensation=compensation,
         invariants=payload.invariants,
         idempotency_key=payload.idempotency_key,
         requires_approval=payload.requires_approval,
@@ -484,18 +629,43 @@ async def stream_saga(saga_id: str, bound_tenant: str | None = Depends(get_bound
 
 
 @app.get("/saga/dead-letters", dependencies=_PROTECTED)
-def list_dead_letters() -> dict[str, Any]:
+def list_dead_letters(bound_tenant: str | None = Depends(get_bound_tenant)) -> dict[str, Any]:
     """Return sagas that reached COMPENSATION_FAILED and require manual operator resolution."""
     if not hasattr(saga_store, "list_dead_letters"):
         return {"dead_letters": []}
-    return {"dead_letters": saga_store.list_dead_letters()}
+    return {"dead_letters": saga_store.list_dead_letters(bound_tenant)}
 
 
 @app.post("/memory/consolidate", dependencies=_PROTECTED)
-def run_consolidation(tenant_id: str, background_tasks: BackgroundTasks) -> dict[str, str]:
+def run_consolidation(
+    tenant_id: str,
+    background_tasks: BackgroundTasks,
+    bound_tenant: str | None = Depends(get_bound_tenant),
+) -> dict[str, str]:
     """Trigger an asynchronous memory consolidation sleep-cycle."""
+    enforce_tenant_access(bound_tenant, tenant_id)
     background_tasks.add_task(consolidator.run_consolidation_cycle, tenant_id)
     return {"status": "QUEUED", "message": "Asynchronous sleep cycle triggered."}
+
+
+@app.post("/memory", dependencies=_PROTECTED, status_code=status.HTTP_201_CREATED)
+def ingest_memory(
+    payload: MemoryIngestRequest,
+    bound_tenant: str | None = Depends(get_bound_tenant),
+) -> dict[str, str]:
+    """Create a tenant-scoped episodic memory with a generated embedding."""
+    enforce_tenant_access(bound_tenant, payload.tenant_id)
+    memory_id = str(uuid.uuid4())
+    timescale.write_episodic_memory(
+        memory_id,
+        payload.tenant_id,
+        payload.agent_role,
+        payload.summary,
+        payload.importance,
+        embedding_service.embed(payload.summary),
+        payload.context,
+    )
+    return {"memory_id": memory_id, "status": "CREATED"}
 
 
 @app.get("/memory/active", dependencies=_PROTECTED)
@@ -522,6 +692,11 @@ def get_active_memories(
         limit=limit,
         offset=offset,
     )
+    timescale.mark_retrieved([str(memory["memory_id"]) for memory in active])
+    retrieved_at = datetime.now(timezone.utc)
+    for memory in active:
+        memory["retrieval_count"] = int(memory["retrieval_count"]) + 1
+        memory["last_retrieved_at"] = retrieved_at
 
     for m in active:
         neighbors = neo4j.get_neighbors(m["agent_role"])
@@ -536,12 +711,45 @@ def get_active_memories(
 
 
 @app.post("/speculative/run", dependencies=_PROTECTED)
-async def run_speculative(payload: SpeculativeRequest) -> dict[str, Any]:
-    """Validate candidate drafts in parallel and commit the first valid one."""
+async def run_speculative(
+    payload: SpeculativeRequest,
+    bound_tenant: str | None = Depends(get_bound_tenant),
+) -> dict[str, Any]:
+    """Validate drafts concurrently, then commit the winner through a durable saga."""
+    enforce_tenant_access(bound_tenant, payload.tenant_id)
     drafts = [d.model_dump() for d in payload.drafts]
     results = await speculative.run_speculative_drafts(drafts)
-    committed = speculative.select_and_commit(results)
-    return {"results": results, "committed_sandbox": committed}
+    selected = speculative.select_winner(results)
+    if selected is None:
+        return {"results": results, "selected_sandbox": None, "status": "NO_VALID_DRAFT"}
+    sandbox_id, action = selected
+    action_arguments = _validate_tool_args(action.tool_name, action.arguments)
+    if action.tool_name in {"WRITE_FILE", "DELETE_FILE"}:
+        action_arguments, compensation = _derive_file_contract(action.tool_name, action_arguments)
+    else:
+        compensation = ActionPayload("NOOP", {})
+    saga_id = str(uuid.uuid4())
+    coordinator.start_transaction_log(saga_id, payload.goal, payload.tenant_id)
+    step = SagaStep(
+        step_id=str(uuid.uuid4()),
+        step_name=f"speculative winner {sandbox_id}",
+        action=ActionPayload(action.tool_name, action_arguments),
+        compensation=compensation,
+        invariants="",
+        idempotency_key=f"speculative:{sandbox_id}",
+    )
+    success = coordinator.execute_saga(saga_id, [step])
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "Winning draft failed during journaled commit.", "saga_id": saga_id},
+        )
+    return {
+        "results": results,
+        "selected_sandbox": sandbox_id,
+        "saga_id": saga_id,
+        "status": "COMMITTED",
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────

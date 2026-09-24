@@ -1,0 +1,12 @@
+{
+  "verified": true,
+  "rates_match": true,
+  "same_case_ids": true,
+  "row_count": 600,
+  "safe_outcome_rates": {
+    "sagamind_full": 1.0,
+    "langgraph_checkpoint": 0.0,
+    "temporal_saga": 0.5
+  },
+  "result_artifact_sha256": "3cbed6e0ef3bb5a7847a80add9342b2f813e21bfaf98b35960d6af108190586b"
+}

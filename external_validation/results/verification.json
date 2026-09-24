@@ -1,0 +1,14 @@
+{
+  "verified": true,
+  "rates_match": true,
+  "same_case_ids": true,
+  "row_count": 1000,
+  "safe_outcome_rates": {
+    "sagamind_integrated_local": 1.0,
+    "langgraph_checkpoint_native": 0.0,
+    "langgraph_matched_controls": 1.0,
+    "temporal_saga_native": 0.5,
+    "temporal_saga_guarded": 1.0
+  },
+  "result_artifact_sha256": "784c2cc4c9f3a0cd27a5c5b35aa9a276d1a3211f87b97c934a3cca66a6052f63"
+}

@@ -26,10 +26,35 @@ class TestProductionFailClosed:
             db_pass="strong-db",
             neo4j_pass="strong-neo",
             api_keys="key-a,key-b",
+            require_backends=True,
+            state_store_backend="postgres",
         )
         assert s.is_production is True
         assert s.auth_enabled is True
         assert s.api_key_set == {"key-a", "key-b"}
+
+    def test_production_rejects_host_sandbox(self):
+        with pytest.raises(RuntimeError, match="SANDBOX_EXECUTION_MODE"):
+            Settings(
+                env="production",
+                db_pass="strong-db",
+                neo4j_pass="strong-neo",
+                api_keys="key-a",
+                require_backends=True,
+                state_store_backend="postgres",
+                sandbox_execution_mode="host",
+                sandbox_allow_host_fallback=True,
+            )
+
+    def test_production_requires_durable_backends(self):
+        with pytest.raises(RuntimeError, match="REQUIRE_BACKENDS"):
+            Settings(
+                env="production",
+                db_pass="strong-db",
+                neo4j_pass="strong-neo",
+                api_keys="key-a",
+                state_store_backend="postgres",
+            )
 
 
 class TestWorkspaceValidation:
@@ -40,6 +65,16 @@ class TestWorkspaceValidation:
     def test_absolute_workspace_root_ok(self, tmp_path):
         s = Settings(allowed_workspace_root=str(tmp_path))
         assert s.allowed_workspace_root == str(tmp_path)
+
+
+class TestSandboxValidation:
+    def test_unknown_execution_mode_rejected(self):
+        with pytest.raises(ValueError, match="SANDBOX_EXECUTION_MODE"):
+            Settings(sandbox_execution_mode="container-ish")
+
+    def test_resource_limits_must_be_sane(self):
+        with pytest.raises(ValueError, match="SANDBOX_MEMORY_LIMIT_MB"):
+            Settings(sandbox_memory_limit_mb=32)
 
 
 class TestDerivedHelpers:

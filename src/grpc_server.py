@@ -2,12 +2,10 @@
 SagaMind gRPC Gateway
 =====================
 
-Async gRPC server mirroring the REST surface, for low-latency service-to-service calls.
+Async private gRPC subset for low-latency service-to-service transaction calls.
 
-The generated stubs live in ``src/generated`` and are produced by ``scripts/gen_proto.sh``
-(`pip install -e ".[grpc]"` then run the script). They are intentionally **not** committed,
-so this module imports them lazily and raises an actionable error if codegen has not run —
-keeping the rest of the package importable without the gRPC toolchain.
+Generated stubs live in ``src/generated`` and are committed with the schema. Regenerate
+them with ``scripts/gen_proto.sh`` after changing ``proto/sagamind.proto``.
 """
 
 from __future__ import annotations
@@ -23,6 +21,7 @@ from src.memory.timescale_store import TimescaleMemoryStore
 from src.models import ActionPayload, SagaStep
 from src.orchestrator.coordinator import SagaTransactionCoordinator
 from src.orchestrator.sandbox import WasmSandbox
+from src.orchestrator.state_store import SagaStateStore
 from src.verifier.z3_prover import Z3Verifier
 
 logger = get_logger("SagaMind.gRPC")
@@ -47,12 +46,36 @@ def build_servicer(coordinator: SagaTransactionCoordinator) -> Any:
     import uuid
 
     class SagaMindServicer(pb2_grpc.SagaMindServicer):  # type: ignore[misc, name-defined]
+        @staticmethod
+        def _authorize(context: Any, tenant_id: str | None) -> bool:
+            from src.config import settings
+
+            if not settings.auth_enabled:
+                return True
+            metadata = {item.key.lower(): item.value for item in context.invocation_metadata()}
+            key = metadata.get("x-api-key")
+            bound = settings.api_key_tenant_map.get(key or "")
+            allowed = bool(key and key in settings.api_key_set and (bound is None or bound == tenant_id))
+            if not allowed:
+                context.set_code(__import__("grpc").StatusCode.PERMISSION_DENIED)
+                context.set_details("Invalid API key or tenant binding.")
+            return allowed
+
         def StartSaga(self, request: Any, context: Any) -> Any:  # noqa: N802 - gRPC RPC name
+            if not self._authorize(context, request.tenant_id):
+                return pb2.StartSagaResponse()
             saga_id = str(uuid.uuid4())
             coordinator.start_transaction_log(saga_id, request.goal, request.tenant_id)
             return pb2.StartSagaResponse(saga_id=saga_id, status="RUNNING")
 
         def SubmitStep(self, request: Any, context: Any) -> Any:  # noqa: N802 - gRPC RPC name
+            state = coordinator.get_saga_status(request.saga_id)
+            if state is None:
+                context.set_code(__import__("grpc").StatusCode.NOT_FOUND)
+                context.set_details("Saga not found.")
+                return pb2.StepResult(error="Saga not found.")
+            if not self._authorize(context, state["tenant_id"]):
+                return pb2.StepResult(error="Unauthorized.")
             step = _proposal_to_step(pb2, request)
             ok = coordinator.execute_saga(request.saga_id, [step])
             return pb2.StepResult(
@@ -67,6 +90,8 @@ def build_servicer(coordinator: SagaTransactionCoordinator) -> Any:
                 context.set_code(__import__("grpc").StatusCode.NOT_FOUND)
                 context.set_details("Saga not found.")
                 return pb2.SagaStatusResponse()
+            if not self._authorize(context, state["tenant_id"]):
+                return pb2.SagaStatusResponse()
             return pb2.SagaStatusResponse(
                 saga_id=state["saga_id"],
                 tenant_id=state["tenant_id"],
@@ -76,6 +101,13 @@ def build_servicer(coordinator: SagaTransactionCoordinator) -> Any:
             )
 
         def StreamSteps(self, request: Any, context: Any) -> Any:  # noqa: N802 - gRPC RPC name
+            state = coordinator.get_saga_status(request.saga_id)
+            if state is None:
+                context.set_code(__import__("grpc").StatusCode.NOT_FOUND)
+                context.set_details("Saga not found.")
+                return
+            if not self._authorize(context, state["tenant_id"]):
+                return
             step = _proposal_to_step(pb2, request)
             events: list[Any] = []
 
@@ -114,12 +146,23 @@ async def serve(port: int | None = None) -> None:
     timescale = TimescaleMemoryStore()
     neo4j = Neo4jGraphStore()
     _consolidator = MemoryConsolidator(timescale, neo4j)
-    coordinator = SagaTransactionCoordinator(verifier, sandbox)
+    saga_store = SagaStateStore()
+    coordinator = SagaTransactionCoordinator(verifier, sandbox, db_client=saga_store)
+    coordinator.recover()
 
     server = grpc.aio.server()
     pb2_grpc.add_SagaMindServicer_to_server(build_servicer(coordinator), server)
-    server.add_insecure_port(f"[::]:{port}")
-    logger.info("SagaMind gRPC server listening on :%d", port)
+    if settings.grpc_tls_cert and settings.grpc_tls_key:
+        with open(settings.grpc_tls_key, "rb") as key_file, open(settings.grpc_tls_cert, "rb") as cert_file:
+            credentials = grpc.ssl_server_credentials(((key_file.read(), cert_file.read()),))
+        server.add_secure_port(f"[::]:{port}", credentials)
+        transport = "TLS"
+    elif settings.is_production:
+        raise RuntimeError("Production gRPC requires GRPC_TLS_CERT and GRPC_TLS_KEY.")
+    else:
+        server.add_insecure_port(f"[::]:{port}")
+        transport = "insecure-development"
+    logger.info("SagaMind gRPC server listening on :%d (%s)", port, transport)
     await server.start()
     await server.wait_for_termination()
 

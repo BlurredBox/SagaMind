@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package sagamind.v1;
 
-// SagaMind transactional runtime gRPC surface. Mirrors the REST API in src/main.py.
+// SagaMind's private transactional gRPC subset. The richer REST schemas remain canonical.
 // Generate Python stubs with: ./scripts/gen_proto.sh  (outputs to src/generated/).
 service SagaMind {
   rpc StartSaga (StartSagaRequest) returns (StartSagaResponse);

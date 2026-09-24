@@ -67,8 +67,9 @@ def saga_step(
 ) -> dict[str, Any]:
     """Submit and execute one saga step through the verification gate.
 
-    *tool_name*/*compensation_tool* must be one of: WRITE_FILE, DATABASE_QUERY, NOOP,
-    DELETE_FILE. *invariants* is an SMT-LIB2 assertion checked before execution. Set
+    Action tools are WRITE_FILE, DELETE_FILE, and NOOP. File rollback contracts are
+    captured by the server; compensation tools are RESTORE_FILE, DELETE_FILE, and
+    NOOP. *invariants* is an SMT-LIB2 assertion checked before execution. Set
     *requires_approval* to pause the saga for human approval (see saga_approve/reject).
     """
     return _client.submit_step(

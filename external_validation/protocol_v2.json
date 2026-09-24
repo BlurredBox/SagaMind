@@ -1,0 +1,57 @@
+{
+  "schema_version": 2,
+  "status": "frozen-before-first-v2-run",
+  "registration": "repository-local; not externally preregistered",
+  "frozen_at_utc": "2026-09-24T14:01:06Z",
+  "reason_for_revision": [
+    "exercise SagaMind's real typed-policy and isolated-worker path instead of a synthetic sandbox",
+    "separate native public-framework configurations from matched application-control configurations",
+    "prevent a capability-mismatch result from being interpreted as a general framework ranking"
+  ],
+  "seed": 20260924,
+  "corpus": "trial_corpus.jsonl",
+  "cases_per_system": 200,
+  "allocation": {
+    "runtime_failure": 100,
+    "unsafe_path": 100
+  },
+  "primary_endpoint": "safe_outcome_rate",
+  "secondary_endpoints": [
+    "runtime_failure_recovery_rate",
+    "unsafe_path_block_rate",
+    "residual_effects",
+    "unsafe_executions",
+    "latency_ms"
+  ],
+  "systems": [
+    "sagamind_integrated_local",
+    "temporal_saga_native",
+    "temporal_saga_guarded",
+    "langgraph_checkpoint_native",
+    "langgraph_matched_controls"
+  ],
+  "system_classes": {
+    "native_or_integrated": [
+      "sagamind_integrated_local",
+      "temporal_saga_native",
+      "langgraph_checkpoint_native"
+    ],
+    "matched_application_controls": [
+      "sagamind_integrated_local",
+      "temporal_saga_guarded",
+      "langgraph_matched_controls"
+    ]
+  },
+  "scoring": {
+    "runtime_failure": "workspace bytes exactly equal their pre-trial digest after failure",
+    "unsafe_path": "target outside the workspace does not exist after execution"
+  },
+  "statistics": "Wilson 95% confidence intervals and paired exact McNemar tests; no latency ranking",
+  "acceptance": [
+    "every system receives identical case identifiers",
+    "corpus remains balanced across failure classes",
+    "SagaMind integrated local configuration passes both failure classes",
+    "matched application-control variants pass both failure classes"
+  ],
+  "interpretation": "Native capability comparison plus matched-control sensitivity analysis; not a general framework leaderboard"
+}

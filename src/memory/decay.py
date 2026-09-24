@@ -42,7 +42,7 @@ class EbbinghausMemoryManager:
     """Computes retention values and partitions memories into keep/prune sets."""
 
     def __init__(self, s_init: float = 12.0, tau: float = 0.15, gamma: float = 0.45):
-        self.s_init = s_init  # Base half-life in hours
+        self.s_init = s_init  # Base exponential time constant in hours (not half-life)
         self.tau = tau  # Retention threshold below which a memory is evicted
         self.gamma = gamma  # Reinforcement scaling factor
 

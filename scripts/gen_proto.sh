@@ -6,11 +6,12 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${ROOT}/src/generated"
+PYTHON_BIN="${PYTHON_BIN:-python}"
 
 mkdir -p "${OUT}"
 touch "${OUT}/__init__.py"
 
-python -m grpc_tools.protoc \
+"${PYTHON_BIN}" -m grpc_tools.protoc \
   --proto_path="${ROOT}/proto" \
   --python_out="${OUT}" \
   --grpc_python_out="${OUT}" \

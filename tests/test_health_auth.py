@@ -37,11 +37,32 @@ class TestHealth:
         resp = client.get("/metrics")
         assert resp.status_code == 200
 
+    def test_readiness_reports_truthful_isolation_modes(self, client):
+        resp = client.get("/ready")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "READY"
+        assert body["backends"]["isolation"] == "isolated-worker"
+        assert body["backends"]["wasi"] in {"live", "unavailable"}
+
 
 class TestAuthDisabledByDefault:
     def test_saga_start_open_when_no_keys(self, client):
         resp = client.post("/saga/start", json={"tenant_id": "t", "goal": "g"})
         assert resp.status_code == 200
+
+    def test_invalid_content_length_is_rejected(self, client):
+        resp = client.post(
+            "/saga/start",
+            content='{"tenant_id":"t","goal":"g"}',
+            headers={"Content-Length": "not-a-number", "Content-Type": "application/json"},
+        )
+        assert resp.status_code == 400
+
+    def test_declared_oversized_body_is_rejected(self, client, app_module, monkeypatch):
+        monkeypatch.setattr(app_module.settings, "max_request_bytes", 5)
+        resp = client.post("/saga/start", json={"tenant_id": "t", "goal": "g"})
+        assert resp.status_code == 413
 
 
 class TestAuthEnforced:

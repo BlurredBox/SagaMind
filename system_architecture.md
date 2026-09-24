@@ -1,12 +1,14 @@
 # SagaMind: System Architecture and Subsystem Specifications
 
+> **Status:** This document mixes implemented components with target architecture. `ARCHITECTURE.md` is the sole source of truth for shipped behavior; `research_paper.md` and executable tests contain evidence. COW filesystem overlays, an 8B drafter, a solver cluster, and a Rust core runtime are design targets, not current features.
+
 This document outlines the engineering specifications, network protocols, isolation mechanisms, and database structures of the **SagaMind** transaction-safe runtime.
 
 ---
 
 ## 1. Subsystem Decomposition
 
-SagaMind is built on an asynchronous, message-driven, high-performance architecture. The core execution engine is written in **Rust** to optimize token processing speed and guarantee safety across parallel threads.
+SagaMind's current core execution engine is Python. A small optional Rust/PyO3 cosine-distance kernel exists, but it is not the coordinator or a safety boundary.
 
 ```mermaid
 graph TD
@@ -59,8 +61,8 @@ Bridges the probabilistic output of LLMs with safety verification systems.
 
 ### 2.4 Speculative Execution Orchestrator (SEO)
 Maximizes system throughput by pre-computing likely tool execution paths.
-*   **Drafter Agent:** Lightweight models (e.g. 8B parameter models) predict the next tool call parameters.
-*   **Sandbox Pools:** WebAssembly (Wasm) isolated containers execute tool actions inside Copy-on-Write (COW) file systems, preserving host state.
+*   **Drafter Agent (target):** A future lightweight model may predict next tool-call parameters.
+*   **Sandbox Pools (target):** COW filesystem overlays are not implemented. Current speculation validates without side effects and executes only the winner.
 
 ---
 
@@ -146,5 +148,5 @@ SagaMind enforces strict boundaries between agent processes and physical host re
 ```
 
 1.  **Memory Limits:** Each sandbox runs in a dedicated WebAssembly (Wasmtime) runtime instance, capped at 256MB memory.
-2.  **File System Virtualization:** Sandboxes use Copy-On-Write (COW) disk mounts. Any mutations made by speculative drafts are saved in temporary memory overlays, protecting the base filesystem from modification.
+2.  **File System Virtualization (target):** Future sandboxes may use COW disk mounts. Current speculative drafts do not mutate the filesystem during validation.
 3.  **Outbound Network Proxying:** All external HTTP/gRPC requests are forced through a system gateway proxy that runs validation checks on request headers, filters against whitelists, and rate-limits agent API calls.

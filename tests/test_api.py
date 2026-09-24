@@ -190,3 +190,32 @@ class TestUnknownRoutes:
     def test_unknown_post(self, client):
         resp = client.post("/nonexistent", json={})
         assert resp.status_code in (404, 405)
+
+
+class TestMemoryIngestion:
+    def test_memory_can_be_ingested(self, client):
+        response = client.post(
+            "/memory",
+            json={
+                "tenant_id": "tenant-test",
+                "agent_role": "planner",
+                "summary": "Selected a safe deployment plan.",
+                "importance": 0.8,
+                "context": {"source": "test"},
+            },
+        )
+        assert response.status_code == 201
+        assert response.json()["status"] == "CREATED"
+        assert len(response.json()["memory_id"]) == 36
+
+    def test_memory_rejects_invalid_importance(self, client):
+        response = client.post(
+            "/memory",
+            json={
+                "tenant_id": "tenant-test",
+                "agent_role": "planner",
+                "summary": "bad",
+                "importance": 2,
+            },
+        )
+        assert response.status_code == 422

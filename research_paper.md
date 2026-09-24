@@ -1,159 +1,198 @@
-# SagaMind: A Transaction-Safe Multi-Agent Runtime with Ephemeral-to-Semantic Memory Consolidation & Formal Logic Verification
+# SagaMind: A Reproducible Systems Study of Compensating Transactions, SMT Policy Gates, and Tiered Agent Memory
 
-**Author:** Senior AI/ML Architect & Lead AI Systems Researcher  
-**Date:** June 2026  
-**Project Location:** `Portfolio1/`  
-**Classification:** Advanced Systems Architecture & Compound AI Systems Research  
-
----
+**Artifact status:** research prototype and controlled component evaluation
+**Author:** Harutyun Kesablyan
+**Evaluation date:** 24 September 2026
+**Protocol seed:** `20260924`
 
 ## Abstract
-State-of-the-art multi-agent systems powered by Large Language Models (LLMs) suffer from severe limitations when deployed in production software environments. Chief among these are **sequential cascading failures** (lack of rollback capability, leading to database and system state corruption) and **unbounded memory drift** (information overload, high token overhead, and proactive interference). 
 
-We present **SagaMind**, a novel, enterprise-grade runtime architecture that resolves these bottlenecks. SagaMind introduces three key innovations:
-1. **The Agentic Saga Protocol:** A distributed transaction standard mapping traditional Saga patterns onto LLM execution graphs to guarantee eventual consistency and automated state rollbacks.
-2. **Complementary Learning memory (CLM):** A tiered memory co-processor using Ebbinghaus-based decay equations and offline clustering "sleep cycles" to consolidate volatile episodic interactions into a semantic graph.
-3. **Neuro-Symbolic Gatekeepers:** Integrating first-order logic parsers with the **Z3 SMT Solver** to mathematically verify LLM outputs against safety constraints before environment execution.
+Tool-using language-model agents can mutate external state, yet their plans are stochastic and may fail after partial execution. SagaMind studies a bounded systems question: can established software mechanisms—Saga compensations, satisfiability-modulo-theories (SMT) checks, explicit memory decay, and density-based clustering—be composed into one agent runtime with testable failure semantics?
 
-This paper details the mathematical, theoretical, and architectural foundations of SagaMind.
+We implement a Python prototype and an offline, seeded evaluation. In 1,000 paired synthetic fault-injection trials, registered LIFO compensations restored the controlled state in 1,000 trials (rate 1.000; Wilson 95% CI [0.9962, 1.0000]), while naive sequential execution restored none (0.000; 95% CI [0.0000, 0.0038]); exact McNemar p < 1.9×10⁻³⁰¹. On 1,000 generated concrete arithmetic policies, the Z3-backed gate agreed with an independent oracle in all cases (95% CI [0.9962, 1.0000]), with sub-millisecond p95 latency on the recorded test machine. In 800 real temporary-filesystem trials, the unprotected baseline produced no safe outcomes, verifier-only and Saga-only each achieved 0.500 by addressing different failure classes, and the combined system achieved 1.000 (95% CI [0.9812, 1.0000]). Across 30 seeded synthetic clustering datasets, deterministic cosine-DBSCAN obtained mean pairwise F1 1.000 for four deliberately separated groups. A 360-case grid found no violations of the decay function's stated monotonic properties.
 
----
+These results validate narrow implementation hypotheses under controlled conditions. A frozen extension also compares identical filesystem cases against Temporal 1.33.0's documented Saga pattern and LangGraph 1.2.12's documented checkpoint pattern. It does not establish better end-to-end agent task performance, human-like memory, general distributed consistency, or scientific novelty of the constituent algorithms. SagaMind is therefore best described as a reproducible systems artifact and research candidate—not a confirmed scientific discovery. Broader benchmarks, realistic failures, and unaffiliated replication are required before stronger claims are justified.
 
-## 1. Introduction & Problem Statement
-In recent years, the industry has transitioned from single-shot prompting to **Compound AI Systems** where LLM agents act as autonomous decision-makers coordinating tools and APIs. However, existing frameworks (e.g., CrewAI, AutoGen) lack the robustness guarantees expected in mission-critical software. 
+## 1. Research question and contribution
 
-### 1.1 The Reliability Gap
-In traditional backend systems, operations that span multiple services are governed by distributed transactional patterns to prevent data corruption. In contrast, LLM agents execute commands immediately on external systems (creating files, calling payment endpoints, editing databases) without safety bounds. A failure at step $N$ leaves steps $1$ to $N-1$ uncommitted but irreversible, rendering the system state inconsistent.
+Primary question:
 
-### 1.2 The Context Inflation Problem
-As execution traces grow, agents must carry context histories. In traditional RAG (Retrieval-Augmented Generation), systems retrieve raw text chunks from a vector database. This flat approach lacks temporal relations, does not account for factual updates or contradictions, and suffers from linear token scaling costs.
+> Can an agent runtime make state mutation auditable and recoverable by placing explicit policy verification before each action and registered compensations after partial failure?
 
-SagaMind bridges this gap by unifying transactional distributed systems principles, biological memory models, and formal symbolic logic verification.
+SagaMind's contribution is implementation and evaluation of a composition:
 
----
+1. a write-ahead effect journal with explicit ambiguous-outcome recovery;
+2. typed mutation policies plus a concrete-argument SMT escape hatch that fails closed;
+3. bounded compensation-restoration contracts with implementation-bound certificates;
+4. capability-scoped isolated workers and an optional WASI execution primitive;
+5. a tiered memory pipeline with parameterized decay and deterministic cosine-DBSCAN; and
+6. a reproducible evaluation command that emits raw observations and machine-readable summaries.
 
-## 2. Theoretical Framework: Agentic Saga Transactions
+We do **not** claim invention of Sagas, SMT solving, DBSCAN, exponential decay, or complementary learning systems. The Saga pattern originates with García-Molina and Salem (1987); DBSCAN with Ester et al. (1996); Z3 with de Moura and Bjørner (2008); and the biological motivation for complementary learning systems with McClelland, McNaughton, and O'Reilly (1995).
 
-### 2.1 Formal State Transition Model
-We model the environment state as a set of variables $S \in \mathcal{S}$. An agent execution trajectory is a sequence of state transitions:
+## 2. System model
 
-$$S_k = \mathbb{T}(T_k, S_{k-1})$$
+### 2.1 Compensating transaction execution
 
-Where $T_k$ is a non-deterministic agent transaction consisting of a generated action $A_k$ and tool parameters $\theta_k$. Since $A_k$ is generated by a probabilistic neural network, the state transition has a probability $P(S_{fail})$ of terminating in a corrupted state.
+A workflow contains ordered pairs
 
-### 2.2 Saga Protocol for Non-Deterministic Workflows
-To secure the execution path, we organize the workflow as a Saga transaction chain:
+$$
+W = \langle (T_1,C_1), (T_2,C_2), \ldots, (T_n,C_n) \rangle,
+$$
 
-$$\mathcal{C} = \{ (T_1, C_1), (T_2, C_2), \dots, (T_n, C_n) \}$$
+where $T_i$ is a forward action and $C_i$ is its application-defined compensation. If $T_k$ fails, the coordinator invokes $C_{k-1},\ldots,C_1$ in reverse order. This is backward recovery, not database isolation: concurrent observers may see intermediate states, compensations may be approximate, and external side effects may be irreversible.
 
-Where:
-- $T_i$ represents a local transaction executing a tool action.
-- $C_i$ represents a **compensating transaction** designed to restore the environment state to a safe approximation of $S_{i-1}$ if $T_{i+1}$ fails.
+Before invoking an external effect, the runtime persists both the forward action and its inverse. The durable lifecycle is `PREPARED → EXECUTING → APPLIED → COMMITTED`; compensation has separate states. A crash during an external call creates an ambiguous outcome that must be resolved through an observer/idempotent adapter or escalated. The runtime records a distinct terminal state when compensation fails and sends that case to a dead-letter queue.
 
-Unlike traditional transactions, agent compensations can be:
-- **Exact (Deterministic):** Reverting a Git commit, dropping a database column, or deleting a file.
-- **Approximated (Semantic):** Writing a correcting record, initiating a compensation API request, or alerting human supervisors.
+### 2.2 SMT policy gate
 
-The orchestration follows the state-transition algorithm:
-```
-                       +-----> [Commit T_i] -----+
-                       |                         |
-[State S_{i-1}] --> [Execute T_i] --> [Verify Output] -- (OK) --> [State S_i]
-                       |
-                     (Fail)
-                       |
-                       +-----> [Execute C_i] --> [Execute C_{i-1}] ...
-```
+For concrete action arguments $A$ and caller-supplied invariant $I$, the verifier asks whether
 
----
+$$
+A \land \neg I
+$$
 
-## 3. Tiered Cognitive Memory Architecture
+is satisfiable. `unsat` means no counterexample exists for those concrete bindings and the action passes that invariant. `sat` yields a counterexample and rejects the action. `unknown` and timeout reject the action.
 
-SagaMind models its memory layout on the **Complementary Learning Systems (CLS)** theory, which explains how mammalian brains decouple immediate episodic experience from long-term conceptual structures.
+Built-in mutations additionally require typed policies covering required fields, scalar types, bounds, enumerations, maximum lengths, extra arguments, and canonical path containment. Missing policy and unsupported/nested values fail closed. Raw SMT remains an advanced compatibility path. This is still a conditional guarantee: the checker cannot establish that a policy captures human intent.
 
-```
-       +-----------------------------------------------------------+
-       |                       Working Memory                      |
-       |             LLM Context Window: O(1) Cache                |
-       +-----------------------------------------------------------+
-                                     |
-                                     v (Append Event Log)
-       +-----------------------------------------------------------+
-       |                      Episodic Memory                      |
-       |       Chronological trace log (TimescaleDB + pgvector)    |
-       |       Decays exponentially over time: R_m(t)              |
-       +-----------------------------------------------------------+
-                                     |
-                                     v (Asynchronous Sleep Cycle)
-       +-----------------------------------------------------------+
-       |                      Semantic Memory                      |
-       |         Unified Neo4j Knowledge Graph & Concept Nodes     |
-       +-----------------------------------------------------------+
-```
+### 2.3 Compensation contracts
 
-### 3.1 Mathematical Formulation of Memory Decay
-To prevent database query bloat, episodic memory records are subjected to an augmented Ebbinghaus forgetting curve. Let the retention probability $R_m(t)$ of memory $m$ at elapsed time $t$ be:
+The contract DSL declares finite typed state/input domains, a precondition, forward transition, postcondition, compensation, and restoration invariant. Exhaustive bounded verification returns `PROVED`, `REJECTED`, `INVALID`, `UNKNOWN`, or `UNSUPPORTED`; vacuous, unbounded, excessive, and irreversible models cannot receive a proof. The certificate hashes the complete contract, proof result, and declared tool implementation identity. Registration can require that a proved certificate matches the implementation identity. This binds evidence to an identity; it does not prove that external code implements the model.
 
-$$R_m(t) = \exp\left( - \frac{t - t_{last}}{S_m} \right)$$
+### 2.4 Execution boundary
 
-Where $t_{last}$ is the timestamp of the last retrieval event, and $S_m$ is the **memory strength parameter**, calculated as:
+Bundled tools execute in short-lived worker processes after typed-policy and capability checks. Capabilities cover filesystem access, network declarations, environment variables, CPU/time, memory, fuel, and output size. Production rejects host fallback or unavailable workers. The worker boundary contains trusted reference handlers but is not a hostile-code container or microVM; untrusted compiled tools require the WASI path or an external sandbox.
 
-$$S_m = S_0 \cdot \big( 1 + \alpha \ln(N_{retrieval} + 1) \big) \cdot I_m$$
+### 2.5 Memory policy
 
-Here:
-- $S_0$ is the base decay half-life (e.g., 24 hours).
-- $\alpha$ is a reinforcement coefficient.
-- $N_{retrieval}$ is the cumulative retrieval count of the memory node.
-- $I_m \in [0, 1]$ is the semantic importance weight computed by an evaluator model at the time of creation (e.g., failed transactions receive $I_m = 1.0$, trivial outputs receive $I_m = 0.1$).
+For elapsed time $\Delta t$ in hours, importance $I_m$, and retrieval count $N_m$, implemented retention score is
 
-Memories with $R_m(t) < \tau_{prune}$ are dynamically evicted or archived.
+$$
+R_m(\Delta t) = \exp\left(-\frac{\Delta t}{S_m}\right), \qquad
+S_m = S_0\left(1 + \gamma\ln(N_m+1)\right)I_m.
+$$
 
-### 3.2 Asynchronous Sleep Cycle Consolidation
-During simulated "sleep" periods, background worker processes consolidate episodic traces:
-1. **DBSCAN Clustering:** Embeddings are grouped using density-based spatial clustering to isolate related experiences:
-   $$\text{Dist}(x_i, x_j) = 1 - \frac{x_i \cdot x_j}{\|x_i\|\|x_j\|}$$
-2. **Distillation:** A compiler LLM processes each cluster to extract general rules, facts, and relationships.
-3. **Graph Update:** Extracted facts are merged into the Neo4j semantic graph, updating edge weights or generating `:CONTRADICTS` relations if facts conflict.
+$S_0$ is an exponential time constant, **not** a half-life. Corresponding half-life is $S_m\ln 2$. The score is an engineering priority heuristic inspired by forgetting curves; it is not fitted to human-subject data and must not be interpreted as a cognitive model validated by this study.
 
----
+Consolidation applies deterministic DBSCAN with cosine distance. Points labeled as noise create no concept node. Optional language-model summarization can label a cluster, but it is excluded from the offline experiment so model variance and network access cannot affect reproduction.
 
-## 4. Neuro-Symbolic Invariant Verification
+## 3. Hypotheses
 
-Probabilistic language models cannot guarantee safety. SagaMind implements a Neuro-Symbolic Gatekeeper that parses agent action payloads and verifies them against logic specifications using the **Z3 SMT Solver**.
+- **H1 — recovery:** after one injected forward failure, registered compensations restore the controlled mutable state more often than naive sequential execution.
+- **H2 — policy classification:** for generated concrete arithmetic inputs, the SMT gate agrees with a direct Boolean oracle.
+- **H3 — clustering:** deterministic cosine-DBSCAN recovers deliberately separated synthetic concept groups.
+- **H4 — decay properties:** retention is non-increasing in elapsed time and non-decreasing in retrieval count over the tested parameter grid.
+- **H5 — control composition:** verification blocks unsafe paths, compensation restores runtime failures, and their combination covers both classes.
 
-```
-[Agent JSON Proposal] --> [Logic Translator] --> [Z3 SMT Invariant Verification]
-                                                         |
-                                        +----------------+----------------+
-                                        |                                 |
-                                    [ UNSAT ]                          [ SAT ]
-                                        |                                 |
-                                 (Proceed Safe)                   (Rollback & Repair)
+H1, H2, and H5 test runtime behavior. H3 is a pipeline sanity test, not evidence of real-memory quality. H4 checks algebraic behavior, not downstream utility.
+
+## 4. Method
+
+### 4.1 Reproducibility
+
+Run:
+
+```bash
+python -m experiments.evaluate
 ```
 
-For any API call, we compile strict logic assertions. For example, in an automated coding agent:
-- Invariant: A file read tool must never read outside the project root directory.
-  $$\forall p \left( \text{path}(p) \implies \text{prefix}(p, \text{PROJECT\_ROOT}) \right)$$
-- If the agent proposes $p = \text{"/etc/passwd"}$, the logic translator compiles:
-  $$(\text{assert } (\text{not } (\text{str.prefixof } p \text{ PROJECT\_ROOT})))$$
-- Z3 resolves the assert as **SAT** (a violation exists), blocks execution, and returns the counter-example to trigger a Saga rollback.
+Command records seed, Git revision, dirty-tree flag, UTC timestamp, Python version, platform, aggregate statistics, and raw paired Saga observations. Default artifacts:
 
----
+- `experiments/results/summary.json`
+- `experiments/results/saga_trials.csv`
+- `experiments/results/filesystem_ablation_trials.csv`
 
-## 5. Parallel Speculative Action Execution
+No API key, hosted model, database, or network service is used.
 
-In complex agent workflows, sequential tool executions introduce massive latency. SagaMind uses a speculative execution model:
+### 4.2 Fault injection
 
-$$\mathbb{O}_{\text{speculative}} = \max_{j} \Big\{ P_{\text{match}}(j) \Big\}$$
+Each of 1,000 trials samples workflow length uniformly from 2 through 12 and a failure position from 1 through $n-1$. Pre-failure actions append typed mutations to controlled state. Each compensation must remove most recent matching mutation, so test detects incorrect order. Paired baseline runs same forward mutations without compensation.
 
-1. **Speculative Drafting:** An 8B drafting model generates $K$ potential tool calls in parallel.
-2. **Copy-on-Write Sandboxes:** These calls execute in parallel in isolated WebAssembly runtimes.
-3. **Commit Phase:** Once the primary model completes reasoning, if it selects draft path $j$, the sandbox is committed instantly, bypassing execution latency.
+Primary outcome: exact restoration to initial empty state. We report Wilson score intervals for each rate and a two-sided exact McNemar test for paired binary outcomes.
 
----
+### 4.3 SMT classification
 
-## 6. References
-1. *SagaLLM: Distributed Transaction Safety in Agentic Frameworks*, arXiv:2502.1039, 2025.
-2. McClelland, J. L., McNaughton, B. L., & O'Reilly, R. C. (1995). *Why there are complementary learning systems in the hippocampus and neocortex*. Psychological Review.
-3. *SleepGate: Automated Memory Consolidation and Active Forgetting in LLM Agents*, CMU CS Technical Report, 2026.
-4. *ADASPEC: Multilingual Adaptive Speculative Decoding at Scale*, arXiv:2601.0945, 2026.
+For 1,000 seeded inputs, amount, balance, and privilege values are generated independently. Policy requires non-negative amount, amount not exceeding balance, and privilege for amounts over 1,000. Expected labels come from direct Boolean implementation independent of SMT parsing. We report accuracy, false accepts, false rejects, and per-case verification latency.
+
+### 4.4 Synthetic clustering
+
+Each of 30 datasets contains four groups of 20 points in 32 dimensions. Group centers are orthogonal basis vectors; isotropic Gaussian noise with standard deviation 0.025 is added. Cosine-DBSCAN uses $\epsilon=0.08$ and `min_samples=3`. We report pairwise F1 and discovered cluster count. Parameters are fixed before evaluation in script.
+
+### 4.5 Decay properties
+
+Grid crosses five importance values, six retrieval counts, and eight elapsed-time values. Separate sweeps test monotonicity in time and retrieval count with numerical tolerance $10^{-12}$.
+
+### 4.6 Real-filesystem ablation and failure matrix
+
+Four variants run against disposable real directories: sequential/no controls, verification only, Saga compensation only, and full. Even-numbered trials overwrite one file, create another, then raise; odd-numbered trials attempt a path escape. We report safe outcomes, restoration, unsafe execution, residual effects, Wilson intervals, and latency. Separate deterministic cases exercise a false tool result, duplicate idempotency key, crash after effect execution but before durable acknowledgement, and failed compensation escalation.
+
+## 5. Results
+
+<!-- GENERATED_RESULTS:START -->
+| Component | Sample | Outcome |
+|---|---:|---|
+| Saga fault injection | 1,000 paired trials | SagaMind 1.000 restored; naive 0.000; exact McNemar p=1.87e-301 |
+| SMT classification | 1,000 cases | Accuracy 1.000; 0 false accepts; 0 false rejects |
+| SMT latency | 1,000 cases | Median 0.74 ms; p95 0.96 ms |
+| Synthetic clustering | 30 datasets | Mean pairwise F1 1.000; mean 4 clusters |
+| Decay properties | 360 checks | 0 monotonicity violations |
+| Filesystem ablation: sequential | 200 trials | Safe 0.000; recovery 0.000; path block 0.000; residual effects 200; unsafe executions 100 |
+| Filesystem ablation: verify-only | 200 trials | Safe 0.500; recovery 0.000; path block 1.000; residual effects 200; unsafe executions 0 |
+| Filesystem ablation: Saga-only | 200 trials | Safe 0.500; recovery 1.000; path block 0.000; residual effects 0; unsafe executions 100 |
+| Filesystem ablation: full | 200 trials | Safe 1.000; recovery 1.000; path block 1.000; residual effects 0; unsafe executions 0 |
+| Failure-semantics matrix | 4 deterministic cases | 4 passed |
+<!-- GENERATED_RESULTS:END -->
+
+Perfect synthetic clustering result reflects intentionally separable sanity-test data. It must not be extrapolated to natural-language embeddings. Likewise, H1's effect is expected in a model where every completed action has an exact, successful inverse; important result is that implementation preserves this property under randomized workflow length and failure position.
+
+### 5.1 Named public-baseline extension
+
+A repository-local v2 protocol was frozen before the integrated comparison run, but was not externally preregistered. The runner supplied the same shuffled 200-case corpus to SagaMind's integrated local path and to native and matched-control Temporal 1.33.0 and LangGraph 1.2.12 configurations. Half the cases performed two real filesystem mutations and then failed; half attempted a write outside the allowed workspace. A framework-neutral scorer inspected filesystem bytes directly.
+
+| Configuration | Trials | Safe outcome | Runtime recovery | Unsafe-path block | Residual effects | Unsafe executions |
+|---|---:|---:|---:|---:|---:|---:|
+| SagaMind integrated local | 200 | 1.000 | 1.000 | 1.000 | 0 | 0 |
+| Temporal Saga, native | 200 | 0.500 | 1.000 | 0.000 | 0 | 100 |
+| Temporal Saga + path guard | 200 | 1.000 | 1.000 | 1.000 | 0 | 0 |
+| LangGraph checkpoint, native | 200 | 0.000 | 0.000 | 0.000 | 200 | 100 |
+| LangGraph + matched controls | 200 | 1.000 | 1.000 | 1.000 | 0 | 0 |
+
+SagaMind's primary rate was 1.000 (Wilson 95% CI [0.9812, 1.0000]). Against SagaMind, paired exact McNemar p was $1.58\times10^{-30}$ for native Temporal and $1.24\times10^{-60}$ for native LangGraph; both matched-control variants tied SagaMind at 1.000 (McNemar p=1.0). The matched results are essential: this workload does not establish general framework superiority, and both public frameworks can satisfy it with the relevant application safeguards. Temporal used its official ephemeral test server; the study did not exercise a production cluster, process crash, or network partition. Latencies are not compared inferentially because the systems expose different services. Raw rows, exact hashed locks, source/corpus hashes, and the separate metric recalculator are in `external_validation/`.
+
+This run is a self-replication performed within the project, not independent replication. The frozen bundle and attestation are ready for an unaffiliated executor; no independent-replication claim is made until that attestation is signed.
+
+## 6. Threats to validity
+
+**Construct validity.** Empty-list restoration approximates consistency but excludes semantic, partially reversible, and third-party effects. Synthetic vector separation does not represent real agent memories. Arithmetic policies cover only a small part of SMT-LIB.
+
+**Internal validity.** Implementation and oracle were written by the same project. Despite separate code paths, shared misunderstandings remain possible. Crash boundaries are injected deterministically in one process; they do not reproduce every operating-system, storage, or network failure.
+
+**External validity.** Results come from one local ARM macOS environment. The core study exercises no live TimescaleDB, Neo4j, Redis, WASI toolchain, or multi-process production deployment. The public-baseline extension uses Temporal's ephemeral test server, not a production cluster. Latency is not portable across hardware, solver, or framework versions.
+
+**Statistical conclusion validity.** Confidence intervals quantify repeated generated cases, not universe of real workflows. Generated cases are seeded and conditionally independent, but are not a random sample of production agent behavior.
+
+## 7. What would justify a discovery claim
+
+A defensible stronger claim needs, at minimum:
+
+1. preregistered hypotheses and frozen evaluation code;
+2. public, realistic agent workloads and failure traces;
+3. broader public baselines beyond the included LangGraph checkpoint and Temporal Saga configurations;
+4. external ablations for memory, graph consolidation, and speculative execution beyond the included verification/compensation study;
+5. end-to-end measures: task success, residual corruption, recovery time, token cost, retrieval quality, and operator burden;
+6. multiple machines, solver versions, model providers, and seeds;
+7. adversarial tests for policy gaps and irreversible effects; and
+8. unaffiliated replication using the prepared bundle, followed by peer review.
+
+Until those steps are complete, evidence supports “tested research prototype,” not “proven scientific discovery.”
+
+## References
+
+1. García-Molina, H., & Salem, K. (1987). *Sagas*. Proceedings of ACM SIGMOD, 249–259. https://doi.org/10.1145/38713.38742
+2. Ester, M., Kriegel, H.-P., Sander, J., & Xu, X. (1996). *A Density-Based Algorithm for Discovering Clusters in Large Spatial Databases with Noise*. KDD-96. https://aaai.org/papers/kdd96-037-a-density-based-algorithm-for-discovering-clusters-in-large-spatial-databases-with-noise/
+3. de Moura, L., & Bjørner, N. (2008). *Z3: An Efficient SMT Solver*. TACAS 2008. https://www.microsoft.com/en-us/research/publication/z3-an-efficient-smt-solver/
+4. McClelland, J. L., McNaughton, B. L., & O'Reilly, R. C. (1995). *Why There Are Complementary Learning Systems in the Hippocampus and Neocortex*. Psychological Review, 102(3), 419–457. https://doi.org/10.1037/0033-295X.102.3.419
+5. Maharana, A., et al. (2024). *Evaluating Very Long-Term Conversational Memory of LLM Agents*. arXiv:2402.17753. https://arxiv.org/abs/2402.17753
+6. Temporal Technologies. (2026). *Error handling — Python SDK: Implement rollback logic with the Saga pattern*. https://docs.temporal.io/develop/python/best-practices/error-handling
+7. LangChain. (2026). *LangGraph persistence*. https://docs.langchain.com/oss/python/langgraph/persistence

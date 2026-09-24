@@ -56,7 +56,19 @@ class TestCompensationLog:
         store = SagaStateStore()
         store.write_transaction_state("s3", "RUNNING", {})
         store.append_compensation("s3", "DELETE_FILE", {"path": "/a"})
-        store.append_compensation("s3", "DATABASE_QUERY", {"q": "DELETE 1"})
+        store.append_compensation("s3", "RESTORE_FILE", {"path": "/a", "existed": False, "previous": ""})
         incomplete = {s["saga_id"]: s for s in store.list_incomplete()}
         comps = incomplete["s3"]["compensations"]
-        assert [c["tool_name"] for c in comps] == ["DELETE_FILE", "DATABASE_QUERY"]
+        assert [c["tool_name"] for c in comps] == ["DELETE_FILE", "RESTORE_FILE"]
+
+
+class TestDeadLetters:
+    def test_tenant_filter_prevents_cross_tenant_visibility(self):
+        store = SagaStateStore()
+        store.write_transaction_state("s-a", "RUNNING", {"tenant_id": "a"})
+        store.write_transaction_state("s-b", "RUNNING", {"tenant_id": "b"})
+        store.push_dead_letter("s-a", "one", "failed")
+        store.push_dead_letter("s-b", "two", "failed")
+
+        assert [item["saga_id"] for item in store.list_dead_letters("a")] == ["s-a"]
+        assert {item["saga_id"] for item in store.list_dead_letters()} == {"s-a", "s-b"}

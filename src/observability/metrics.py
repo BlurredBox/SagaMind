@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from time import perf_counter
 from typing import Any
 
@@ -79,11 +79,14 @@ def span(name: str, **attributes: Any) -> Iterator[None]:
         from opentelemetry import trace
 
         tracer = trace.get_tracer("sagamind")
-        with tracer.start_as_current_span(name) as current:
+    except Exception:  # noqa: BLE001 - tracing is optional
+        context: Any = nullcontext(None)
+    else:
+        context = tracer.start_as_current_span(name)
+    with context as current:
+        if current is not None:
             for key, value in attributes.items():
                 current.set_attribute(key, value)
-            yield
-    except Exception:  # noqa: BLE001 - tracing is optional
         yield
 
 
