@@ -1,21 +1,45 @@
-MIT License
+# SagaMind Attribution License
 
-Copyright (c) 2026 SagaMind Contributors
+Version 1.0 2026
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Copyright (c) 2026 SagaMind Contributors.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+Original project: SagaMind
+Developed by: BlurredBox
+Original author: Harutyun Kesablyan
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, in whole or in part, for any purpose, including commercial purposes, subject to the following conditions:
+
+### 1. Attribution
+
+Any person or organization distributing, publishing, selling, or incorporating the Software, or any copyright-protected portion thereof, into another publicly available software product or service must provide the following attribution:
+
+"Originally developed as SagaMind by BlurredBox, with Harutyun Kesablyan as an original author."
+
+This attribution must be included in a reasonably accessible location, such as the product documentation, README, legal notices, credits, or About page.
+
+For private or internal use without public distribution, preserving the copyright and attribution notices in the Software is sufficient.
+
+### 2. Preservation of Notices
+
+The original copyright notice, this License, and all existing contributor attribution notices must be preserved in copies or substantial portions of the Software.
+
+Modifications and derivative works must not misrepresent the original authorship of SagaMind.
+
+### 3. Freedom of Use
+
+The Software may be freely used for personal, educational, academic, research, and commercial purposes.
+
+No payment, royalty, prior authorization, or revenue sharing is required.
+
+Users may modify the Software and distribute their modifications under different terms, provided that the original attribution and applicable notices are preserved.
+
+### 4. No Endorsement
+
+Use of the names SagaMind, BlurredBox, or Harutyun Kesablyan for attribution does not imply endorsement, sponsorship, or affiliation.
+
+### 5. Disclaimer of Warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+
+IN NO EVENT SHALL THE AUTHORS, COPYRIGHT HOLDERS, OR CONTRIBUTORS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
