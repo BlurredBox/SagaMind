@@ -20,7 +20,7 @@ We actively monitor and patch vulnerabilities in the following versions of SagaM
 We take the security of our runtime and sandboxing layers seriously. If you discover a security vulnerability, **please do not disclose it publicly or open a public GitHub issue**. Instead, report it privately through one of the following methods to ensure a coordinated vulnerability disclosure (CVD) process.
 
 ### Contact Information
-* **Email**: kesablyanharut@gmail.com
+* **Email**: harutyun@blurredbox-agd.com
 * **Subject Prefix**: `[SECURITY VULNERABILITY] SagaMind`
 
 ### What to Include in the Report
