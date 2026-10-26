@@ -2,7 +2,7 @@
 # ─────────────────────────────────────────────────────────────────────
 # Stage 1 — build dependencies
 # ─────────────────────────────────────────────────────────────────────
-FROM python:3.11-slim-bookworm AS builder
+FROM python:3.15-slim-bookworm AS builder
 
 WORKDIR /build
 
@@ -16,7 +16,7 @@ RUN pip install --user --no-cache-dir --require-hashes -r requirements.lock
 # ─────────────────────────────────────────────────────────────────────
 # Stage 2 — minimal runtime image (non-root)
 # ─────────────────────────────────────────────────────────────────────
-FROM python:3.11-slim-bookworm AS runner
+FROM python:3.15-slim-bookworm AS runner
 
 # Create an unprivileged user to run the service.
 RUN groupadd --system sagamind && useradd --system --gid sagamind --create-home sagamind
